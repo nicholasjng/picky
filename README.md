@@ -1,0 +1,221 @@
+# picky
+
+A lightweight client for **sparse, shallow, blobless git submodule checkouts**.
+
+Many projects vendor a large dependency as a submodule but only need a fraction
+of its tree. A full checkout of DuckDB is ~280 MB; LLVM is several GB. `picky`
+fetches only the history you ask for (`--depth`), only the objects you ask for
+(`--filter=blob:none`), and writes only the paths you ask for (non-cone
+sparse-checkout) — driven entirely by declarative config committed to
+`.gitmodules`, so any checkout is reproducible from a single command.
+
+`picky` shells out to the `git` CLI; it is a single binary with no libgit2
+dependency.
+
+## Install
+
+```sh
+# from a clone of this repo
+cargo install --path .          # installs `picky` into ~/.cargo/bin
+```
+
+Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for
+`GIT_NO_LAZY_FETCH`) on `PATH` at runtime.
+
+## Quick start
+
+In an existing superproject whose `.gitmodules` declares a submodule:
+
+```sh
+picky init                      # reconstruct every declared submodule
+picky init ext/duckdb           # …or just one
+picky status                    # show pins, sparse state, sizes, patch counts
+picky update ext/duckdb v1.6.3  # bump the pin, re-checkout, re-apply patches
+```
+
+Or add a new sparse submodule from scratch:
+
+```sh
+picky add https://github.com/duckdb/duckdb.git ext/duckdb \
+    --branch main \
+    --sparse /src/ --sparse /third_party/ --sparse /extension/parquet/ \
+    --patches patches
+```
+
+`add` writes the `.gitmodules` entry, builds the checkout, and stages both
+`.gitmodules` and the new gitlink — commit them to record the submodule.
+
+## How it works
+
+For each submodule `picky`:
+
+1. builds the submodule git dir under `.git/modules/<path>` (where `git
+   submodule` expects it);
+2. configures a partial clone (`extensions.partialClone`,
+   `remote.origin.promisor`, `partialclonefilter=blob:none`) and non-cone
+   sparse-checkout (`core.sparseCheckout=true`, `core.sparseCheckoutCone=false`)
+   **before** the first checkout, so unused paths are never written and their
+   blobs never downloaded;
+3. fetches the pinned commit shallow + blobless if it isn't present;
+4. checks it out and runs `sparse-checkout reapply`.
+
+Blobs for in-sparse files are lazy-fetched from the promisor on checkout;
+out-of-sparse blobs are never fetched. Every command is idempotent — a fresh
+clone, a half-finished run, or an existing full checkout all converge to the
+same state.
+
+## Config schema (`.gitmodules`)
+
+`picky` reads and writes `.gitmodules` via `git config -f`, splitting keys
+across two sections joined by the shared subsection name. Git's **standard**
+keys stay in the `submodule.<name>` section it understands; picky's **own**
+options live in a parallel `picky.<name>` section that stock git ignores
+entirely.
+
+| Key | Section | Meaning |
+|---|---|---|
+| `submodule.<name>.path`    | git   | checkout path within the superproject |
+| `submodule.<name>.url`     | git   | remote URL |
+| `submodule.<name>.branch`  | git   | branch to track (used by `update <branch>`) |
+| `submodule.<name>.shallow` | git   | `true` ⇒ shallow fetch (depth 1 unless `depth` set) |
+| `picky.<name>.sparse`      | picky | **multivalued** non-cone pattern; absence ⇒ full checkout |
+| `picky.<name>.depth`       | picky | explicit shallow `--depth N` |
+| `picky.<name>.filter`      | picky | partial-clone filter; default `blob:none`, `none` disables |
+| `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
+
+The `picky.<name>` section holds **only** the options git doesn't understand —
+nothing is duplicated from the `submodule.<name>` section. The pin (gitlink SHA)
+lives where git already keeps it — the superproject tree (`git ls-files -s
+<path>`); no extra config file is introduced.
+
+Example:
+
+```ini
+[submodule "ext/duckdb"]      # git's section — git's keys only
+	path = ext/duckdb
+	url = https://github.com/duckdb/duckdb.git
+	branch = main
+	shallow = true
+[picky "ext/duckdb"]          # picky's section — only what git doesn't know
+	sparse = /src/
+	sparse = /third_party/
+	sparse = /extension/parquet/
+	patches = patches
+```
+
+### Editing sparse patterns after init
+
+Use `picky sparse` to edit the pattern list and reconcile the checkout in one
+step (widening materializes new paths, narrowing trims removed ones):
+
+```sh
+picky sparse ext/duckdb --list                       # show current patterns
+picky sparse ext/duckdb --add /extension/json/        # add + reconcile
+picky sparse ext/duckdb --remove /extension/icu/      # remove (exact match) + reconcile
+picky sparse ext/duckdb --add /a/ --remove /b/        # combine in one run
+picky sparse ext/duckdb --clear                       # drop all → full checkout
+picky sparse ext/duckdb --add /x/ --no-reinit         # edit .gitmodules only
+```
+
+It edits `.gitmodules`, stages it, then re-runs `init` for that submodule
+(`--no-reinit` skips the reconcile). Removal is by **exact value**, so patterns
+with metacharacters like `/extension/*.cmake` work without the `git config
+--unset` regex footgun. The path is optional when there's only one submodule.
+
+Equivalent by hand, if you prefer raw git:
+
+```sh
+git config -f .gitmodules --add picky.ext/duckdb.sparse /extension/json/
+picky init ext/duckdb
+git add .gitmodules
+```
+
+## Patch stack
+
+If a submodule sets `patches`, `picky update` applies every `<patches>/*.patch`
+in lexical order with `git apply --3way` (a working-tree overlay over a pristine
+upstream commit). A failing patch is fatal and leaves conflict markers in the
+tree for you to resolve. Skip the stack with `picky update --no-patches`.
+`picky init` checks out pristine upstream **without** patches; run `picky update`
+(no ref) afterwards to apply them at the current pin.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `picky add <url> <path> [opts]` | declare + check out a new sparse submodule |
+| `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
+| `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
+| `picky sparse <path> [--add/--remove/--clear/--list]` | edit sparse patterns + reconcile |
+| `picky status [<path>…]`        | table of pin, branch, sparse, filter, size, patches |
+| `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion) |
+| `picky completions <shell>`     | print the eval-able dynamic-completion registration script |
+
+Global flags: `-q/--quiet`, `-v/--verbose`. Color honors `NO_COLOR` and TTY
+detection. Run `picky <command> --help` for the full option list.
+
+`update` accepts its two positionals smartly: with one argument, a value that
+matches a submodule path is treated as the path (refresh at current pin);
+otherwise it's treated as a ref against the lone submodule.
+
+## Shell completions
+
+picky uses **dynamic** completion: the binary answers completion requests at
+runtime, so `picky sparse <TAB>` / `init` / `update` / `status` complete on the
+submodule paths declared in the current repo's `.gitmodules` (with the remote
+URL shown as the hint). `picky completions <shell>` prints the eval-able
+registration script (like `zoxide init`) — add the matching line to your shell
+startup file:
+
+```sh
+# bash   (~/.bashrc)
+source <(picky completions bash)
+# zsh    (~/.zshrc)
+eval "$(picky completions zsh)"
+# fish   (~/.config/fish/config.fish)
+picky completions fish | source
+# elvish (~/.config/elvish/rc.elv)
+eval (picky completions elvish | slurp)
+```
+
+Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+Because candidates are computed live, the registration calls back into `picky`
+at each TAB — so `picky` must be on `PATH` (i.e. installed) for completion to
+resolve. If you add the line to your rc file before installing, guard it:
+`command -v picky >/dev/null && eval "$(picky completions zsh)"`.
+
+### Ref completion
+
+`picky update <path> <TAB>` (and the `update <TAB>` shorthand when there's a
+single submodule) completes on the remote's **tags and branches**. Because
+`git ls-remote` is too slow for a keypress, the ref list is cached:
+
+- **Cache key:** the remote URL — `${XDG_CACHE_HOME:-~/.cache}/picky/refs/<hash(url)>`.
+  Shared across every repo using that remote; a `url` change is a new key (auto-invalidated).
+- **TTL:** 1 hour. A fresh cache is served instantly; a stale one is served
+  instantly *and* a background refresh is kicked, so the next TAB is current.
+- **First time / cold cache:** one `ls-remote` runs, bounded to ~2s; on
+  timeout or no network it falls back to the submodule's local refs, then to
+  nothing — completion never blocks long or errors.
+- `picky refresh [<path>…]` warms the cache explicitly (e.g. after a release you
+  want to bump to immediately).
+
+## Local development
+
+```sh
+cargo build                 # debug binary -> target/debug/picky
+cargo run -- status         # run without installing
+cargo test                  # integration tests (tests/integration.rs)
+cargo clippy --all-targets
+cargo fmt
+```
+
+The integration tests spin up a local `file://` blobless remote and a
+superproject fixture, asserting sparse-only materialization, shallow + blobless
+clones, idempotent re-init, pin bumps, and patch apply / fatal broken patch.
+
+## Roadmap
+
+- A `submodule.<name>.postUpdate` hook (e.g. ducky's `OVERRIDE_GIT_DESCRIBE`
+  CMake rewrite is project-specific glue left out of v1).
