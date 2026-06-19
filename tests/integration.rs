@@ -66,6 +66,29 @@ fn picky(dir: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Like [`picky`], but feeds `input` to the child's stdin (for `--stdin`).
+fn picky_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(BIN)
+        .arg("--quiet")
+        .args(args)
+        .current_dir(dir)
+        .env("XDG_CACHE_HOME", dir.join(".cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 /// Drive a dynamic-completion request and return the non-flag candidate lines.
 fn complete(dir: &Path, index: usize, words: &[&str]) -> Vec<String> {
     let out = Command::new(BIN)
@@ -347,6 +370,71 @@ fn update_ref_completion_lists_remote_refs() {
     let only_v2 = complete(&sup, 3, &["picky", "update", "ext/dep", "v2"]);
     assert!(only_v2.iter().any(|r| r == "v2"));
     assert!(!only_v2.iter().any(|r| r == "v1"));
+}
+
+#[test]
+fn sparse_set_replaces_list_from_file_and_stdin() {
+    let (tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let read = || {
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                "--get-all",
+                "picky.ext/dep.sparse",
+            ],
+        )
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    };
+
+    // set from a file: replaces /src/ wholesale, ignoring blanks + comments.
+    let list = tmp.path().join("patterns.txt");
+    write(&list, "# keep only this\n/keep/\n\n");
+    let out = picky(
+        &sup,
+        &[
+            "sparse",
+            "set",
+            "--from",
+            list.to_str().unwrap(),
+            "-p",
+            "ext/dep",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(), vec!["/keep/".to_string()]);
+    assert!(dep.join("keep").is_dir(), "set should materialize /keep/");
+    assert!(!dep.join("src").exists(), "set should trim /src/");
+
+    // set from stdin: replaces again, deduping repeated lines.
+    let out = picky_stdin(
+        &sup,
+        &["sparse", "set", "--stdin", "-p", "ext/dep"],
+        "/src/\n/src/\n",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(), vec!["/src/".to_string()]);
+    assert!(dep.join("src").is_dir());
+    assert!(!dep.join("keep").exists());
+
+    // no source ⇒ error (use `clear` to empty).
+    let out = picky(&sup, &["sparse", "set", "-p", "ext/dep"]);
+    assert!(!out.status.success(), "set with no patterns must fail");
 }
 
 #[test]

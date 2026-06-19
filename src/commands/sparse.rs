@@ -1,8 +1,9 @@
-//! `picky sparse <list|add|remove|clear>` — inspect and edit a submodule's
+//! `picky sparse <list|add|remove|set|clear>` — inspect and edit a submodule's
 //! sparse-checkout patterns, reconciling the checkout afterwards.
 
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result, bail};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use crate::commands;
 use crate::config;
@@ -10,12 +11,52 @@ use crate::console::Console;
 use crate::git;
 
 /// What to do to the pattern list. `List` only reads; the rest mutate and
-/// (unless `no_reinit`) reconcile the checkout via `init`.
+/// (unless `no_reinit`) reconcile the checkout via `init`. `Set` replaces the
+/// whole list; `Clear` empties it.
 pub enum Action {
     List,
     Add(Vec<String>),
     Remove(Vec<String>),
+    Set(Vec<String>),
     Clear,
+}
+
+/// Collect patterns for `add`/`remove`/`set` from positional arguments plus the
+/// optional `--from <file>` and `--stdin` sources, in that order. Blank lines
+/// and `#` comments are skipped, so a pattern file can carry documentation.
+/// Errors if no pattern is supplied from any source (use `clear` to empty).
+pub fn collect_patterns(
+    positional: Vec<String>,
+    stdin: bool,
+    from: Option<PathBuf>,
+) -> Result<Vec<String>> {
+    let mut out = positional;
+    if let Some(path) = from {
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading patterns from {}", path.display()))?;
+        out.extend(parse_lines(&text));
+    }
+    if stdin {
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .context("reading patterns from stdin")?;
+        out.extend(parse_lines(&text));
+    }
+    if out.is_empty() {
+        bail!("no patterns provided — pass them as arguments, --stdin, or --from <file>");
+    }
+    Ok(out)
+}
+
+/// Parse a newline-delimited pattern blob: trim each line, drop blanks and
+/// `#` comments.
+fn parse_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn run(
@@ -44,6 +85,16 @@ pub fn run(
             return Ok(());
         }
         Action::Clear => Vec::new(),
+        Action::Set(p) => {
+            // Replace the whole list; drop duplicates, keeping first occurrence.
+            let mut seen = Vec::new();
+            for pat in p {
+                if !seen.contains(pat) {
+                    seen.push(pat.clone());
+                }
+            }
+            seen
+        }
         Action::Add(_) | Action::Remove(_) => sm.sparse.clone(),
     };
 

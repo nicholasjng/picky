@@ -135,6 +135,7 @@ picky sparse list -p ext/duckdb                          # show current patterns
 picky sparse add /extension/json/ -p ext/duckdb          # add + reconcile
 picky sparse remove /extension/icu/ -p ext/duckdb        # remove (exact match) + reconcile
 picky sparse add /a/ /b/ -p ext/duckdb                   # add several at once
+picky sparse set /src/ /third_party/ -p ext/duckdb       # replace the whole list
 picky sparse clear -p ext/duckdb                         # drop all → full checkout
 picky sparse add /x/ -p ext/duckdb --no-reinit           # edit .gitmodules only
 ```
@@ -143,6 +144,31 @@ It edits `.gitmodules`, stages it, then re-runs `init` for that submodule
 (`--no-reinit` skips the reconcile). Removal is by **exact value**, so patterns
 with metacharacters like `/extension/*.cmake` work without the `git config
 --unset` regex footgun.
+
+#### Bulk input from a file or stdin
+
+`set`, `add`, and `remove` can read newline-delimited patterns from a file
+(`--from <file>`) or stdin (`--stdin`) instead of (or in addition to) positional
+arguments — handy for a long list. Blank lines and `#` comments are skipped, so
+a pattern file doubles as documentation:
+
+```sh
+# replace the whole list from a heredoc — no per-pattern quoting, no loop
+picky sparse set -p ext/duckdb --stdin <<'EOF'
+# CMake glue
+/CMakeLists.txt
+/extension/*.cmake
+# sources
+/src/
+/third_party/
+EOF
+
+# or keep the canonical list in a committed file
+picky sparse set -p ext/duckdb --from sparse-paths.txt
+```
+
+`set` requires at least one source (use `clear` to empty the list) and drops
+duplicate patterns.
 
 Equivalent by hand, if you prefer raw git:
 
@@ -192,7 +218,7 @@ git config -f .gitmodules picky.ext/duckdb.postUpdate \
 | `picky add <url> <path> [opts]` | declare + check out a new sparse submodule |
 | `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
-| `picky sparse <list/add/remove/clear>` | edit sparse patterns + reconcile |
+| `picky sparse <list/add/remove/set/clear>` | edit sparse patterns + reconcile |
 | `picky status [<path>…]`        | table of pin, branch, sparse, filter, size, patches |
 | `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion) |
 | `picky completions <shell>`     | print the eval-able dynamic-completion registration script |

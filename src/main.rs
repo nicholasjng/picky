@@ -7,11 +7,11 @@ mod patch;
 mod refcache;
 mod sparse;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate, Shell};
 
 use config::Submodule;
@@ -225,9 +225,14 @@ enum SparseAction {
     },
     /// Add one or more patterns and reconcile the checkout
     Add {
-        /// Patterns to add
-        #[arg(required = true)]
+        /// Patterns to add (or read them with --stdin / --from)
         patterns: Vec<String>,
+        /// Read newline-delimited patterns from stdin
+        #[arg(long)]
+        stdin: bool,
+        /// Read newline-delimited patterns from a file
+        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+        from: Option<PathBuf>,
         /// Submodule path (optional when only one submodule exists)
         #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
         path: Option<String>,
@@ -237,9 +242,31 @@ enum SparseAction {
     },
     /// Remove one or more patterns (exact match) and reconcile the checkout
     Remove {
-        /// Patterns to remove
-        #[arg(required = true)]
+        /// Patterns to remove (or read them with --stdin / --from)
         patterns: Vec<String>,
+        /// Read newline-delimited patterns from stdin
+        #[arg(long)]
+        stdin: bool,
+        /// Read newline-delimited patterns from a file
+        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+        from: Option<PathBuf>,
+        /// Submodule path (optional when only one submodule exists)
+        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+        path: Option<String>,
+        /// Edit config only; don't re-run init
+        #[arg(long)]
+        no_reinit: bool,
+    },
+    /// Replace the whole pattern list and reconcile the checkout
+    Set {
+        /// Patterns to set (or read them with --stdin / --from)
+        patterns: Vec<String>,
+        /// Read newline-delimited patterns from stdin
+        #[arg(long)]
+        stdin: bool,
+        /// Read newline-delimited patterns from a file
+        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+        from: Option<PathBuf>,
         /// Submodule path (optional when only one submodule exists)
         #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
         path: Option<String>,
@@ -313,22 +340,42 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             depth,
         } => commands::update::run(&root, target, reference, no_patches, depth, con),
         Commands::Sparse { action } => {
-            use commands::sparse::Action;
+            use commands::sparse::{self, Action};
             let (path, op, no_reinit) = match action {
                 SparseAction::List { path } => (path, Action::List, false),
                 SparseAction::Add {
                     patterns,
+                    stdin,
+                    from,
                     path,
                     no_reinit,
-                } => (path, Action::Add(patterns), no_reinit),
+                } => {
+                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
+                    (path, Action::Add(pats), no_reinit)
+                }
                 SparseAction::Remove {
                     patterns,
+                    stdin,
+                    from,
                     path,
                     no_reinit,
-                } => (path, Action::Remove(patterns), no_reinit),
+                } => {
+                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
+                    (path, Action::Remove(pats), no_reinit)
+                }
+                SparseAction::Set {
+                    patterns,
+                    stdin,
+                    from,
+                    path,
+                    no_reinit,
+                } => {
+                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
+                    (path, Action::Set(pats), no_reinit)
+                }
                 SparseAction::Clear { path, no_reinit } => (path, Action::Clear, no_reinit),
             };
-            commands::sparse::run(&root, path, op, no_reinit, con)
+            sparse::run(&root, path, op, no_reinit, con)
         }
         Commands::Status { paths } => commands::status::run(&root, &paths, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
