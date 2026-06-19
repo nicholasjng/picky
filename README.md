@@ -2,15 +2,33 @@
 
 A lightweight client for **sparse, shallow, blobless git submodule checkouts**.
 
-Many projects vendor a large dependency as a submodule but only need a fraction
-of its tree. A full checkout of DuckDB is ~280 MB; LLVM is several GB. `picky`
-fetches only the history you ask for (`--depth`), only the objects you ask for
-(`--filter=blob:none`), and writes only the paths you ask for (non-cone
-sparse-checkout) — driven entirely by declarative config committed to
-`.gitmodules`, so any checkout is reproducible from a single command.
+Projects often vendor a large dependency as a submodule but need only a fraction
+of its tree, its history, or its file contents. `picky` fetches only the history
+you ask for (`--depth`), only the objects you ask for (`--filter=blob:none`), and
+writes only the paths you ask for (non-cone sparse-checkout) — driven entirely by
+declarative config committed to `.gitmodules`, so any checkout is reproducible
+from a single command. For the cases where a pristine checkout isn't quite
+enough, it also carries an optional working-tree patch stack and a post-update
+hook.
 
 `picky` shells out to the `git` CLI; it is a single binary with no libgit2
 dependency.
+
+## Motivating examples
+
+picky generalizes the hand-written `sh` setup scripts that several projects had
+each reinvented:
+
+- **MLIR out of LLVM.** Building MLIR needs LLVM's core, `cmake/`, `third-party/`
+  and all of `mlir/` — but not clang, lldb, flang, the runtimes, or LLVM's
+  ~1.2 GB `test/` tree. A sparse, blobless, depth-1 checkout of
+  `llvm/llvm-project` lands the working tree at **~310 MB instead of ~8 GB**.
+- **DuckDB with local patches.** A sparse checkout of `duckdb/duckdb` trims the
+  working tree from **~280 MB to ~50 MB**, and a committed `patches/` stack is
+  reapplied on top of each pinned upstream commit with `git apply --3way`.
+
+Both started as a bespoke script per repo; picky replaces them with one binary
+driven by a `.gitmodules` entry.
 
 ## Install
 
@@ -188,12 +206,7 @@ otherwise it's treated as a ref against the lone submodule.
 
 ## Shell completions
 
-picky uses **dynamic** completion: the binary answers completion requests at
-runtime, so `picky sparse <TAB>` / `init` / `update` / `status` complete on the
-submodule paths declared in the current repo's `.gitmodules` (with the remote
-URL shown as the hint). `picky completions <shell>` prints the eval-able
-registration script (like `zoxide init`) — add the matching line to your shell
-startup file:
+Add the line for your shell to its startup file:
 
 ```sh
 # bash   (~/.bashrc)
@@ -206,28 +219,11 @@ picky completions fish | source
 eval (picky completions elvish | slurp)
 ```
 
-Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`. `picky` must be
+installed and on your `PATH` for completion to work.
 
-Because candidates are computed live, the registration calls back into `picky`
-at each TAB — so `picky` must be on `PATH` (i.e. installed) for completion to
-resolve. If you add the line to your rc file before installing, guard it:
-`command -v picky >/dev/null && eval "$(picky completions zsh)"`.
-
-### Ref completion
-
-`picky update <path> <TAB>` (and the `update <TAB>` shorthand when there's a
-single submodule) completes on the remote's **tags and branches**. Because
-`git ls-remote` is too slow for a keypress, the ref list is cached:
-
-- **Cache key:** the remote URL — `${XDG_CACHE_HOME:-~/.cache}/picky/refs/<hash(url)>`.
-  Shared across every repo using that remote; a `url` change is a new key (auto-invalidated).
-- **TTL:** 1 hour. A fresh cache is served instantly; a stale one is served
-  instantly *and* a background refresh is kicked, so the next TAB is current.
-- **First time / cold cache:** one `ls-remote` runs, bounded to ~2s; on
-  timeout or no network it falls back to the submodule's local refs, then to
-  nothing — completion never blocks long or errors.
-- `picky refresh [<path>…]` warms the cache explicitly (e.g. after a release you
-  want to bump to immediately).
+You then get `<TAB>` completion on submodule paths (`init`, `update`, `sparse`,
+`status`) and on remote tags/branches for `picky update <path> <TAB>`.
 
 ## Local development
 
