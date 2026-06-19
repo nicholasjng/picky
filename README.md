@@ -82,6 +82,7 @@ entirely.
 | `picky.<name>.depth`       | picky | explicit shallow `--depth N` |
 | `picky.<name>.filter`      | picky | partial-clone filter; default `blob:none`, `none` disables |
 | `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
+| `picky.<name>.postUpdate`  | picky | shell command run after each checkout (post-update hook) |
 
 The `picky.<name>` section holds **only** the options git doesn't understand —
 nothing is duplicated from the `submodule.<name>` section. The pin (gitlink SHA)
@@ -101,26 +102,29 @@ Example:
 	sparse = /third_party/
 	sparse = /extension/parquet/
 	patches = patches
+	postUpdate = cmake -P cmake/OverrideGitDescribe.cmake
 ```
 
 ### Editing sparse patterns after init
 
 Use `picky sparse` to edit the pattern list and reconcile the checkout in one
-step (widening materializes new paths, narrowing trims removed ones):
+step (widening materializes new paths, narrowing trims removed ones). The
+operation is a subcommand; the submodule is named with `-p/--path` (optional
+when there's only one submodule):
 
 ```sh
-picky sparse ext/duckdb --list                       # show current patterns
-picky sparse ext/duckdb --add /extension/json/        # add + reconcile
-picky sparse ext/duckdb --remove /extension/icu/      # remove (exact match) + reconcile
-picky sparse ext/duckdb --add /a/ --remove /b/        # combine in one run
-picky sparse ext/duckdb --clear                       # drop all → full checkout
-picky sparse ext/duckdb --add /x/ --no-reinit         # edit .gitmodules only
+picky sparse list -p ext/duckdb                          # show current patterns
+picky sparse add /extension/json/ -p ext/duckdb          # add + reconcile
+picky sparse remove /extension/icu/ -p ext/duckdb        # remove (exact match) + reconcile
+picky sparse add /a/ /b/ -p ext/duckdb                   # add several at once
+picky sparse clear -p ext/duckdb                         # drop all → full checkout
+picky sparse add /x/ -p ext/duckdb --no-reinit           # edit .gitmodules only
 ```
 
 It edits `.gitmodules`, stages it, then re-runs `init` for that submodule
 (`--no-reinit` skips the reconcile). Removal is by **exact value**, so patterns
 with metacharacters like `/extension/*.cmake` work without the `git config
---unset` regex footgun. The path is optional when there's only one submodule.
+--unset` regex footgun.
 
 Equivalent by hand, if you prefer raw git:
 
@@ -139,6 +143,30 @@ tree for you to resolve. Skip the stack with `picky update --no-patches`.
 `picky init` checks out pristine upstream **without** patches; run `picky update`
 (no ref) afterwards to apply them at the current pin.
 
+## Post-update hook
+
+A submodule may declare `picky.<name>.postUpdate` — a shell command run after
+its working tree is (re)materialized by `add`, `init`, or `update` (in the latter
+case, after the patch stack). It runs through `sh -c` **in the submodule's
+working tree**, and a non-zero exit is fatal. This is the seam for
+project-specific glue such as ducky's `OVERRIDE_GIT_DESCRIBE` CMake rewrite.
+
+These environment variables are exported to the hook:
+
+| Variable | Value |
+|---|---|
+| `PICKY_ROOT`           | absolute path of the superproject root |
+| `PICKY_SUBMODULE_NAME` | the `submodule.<name>` section name |
+| `PICKY_SUBMODULE_PATH` | the submodule's path within the superproject |
+| `PICKY_SUBMODULE_SHA`  | the checked-out commit SHA |
+
+Set it with `picky add … --post-update '<cmd>'`, or by hand:
+
+```sh
+git config -f .gitmodules picky.ext/duckdb.postUpdate \
+    'cmake -P cmake/OverrideGitDescribe.cmake'
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -146,7 +174,7 @@ tree for you to resolve. Skip the stack with `picky update --no-patches`.
 | `picky add <url> <path> [opts]` | declare + check out a new sparse submodule |
 | `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
-| `picky sparse <path> [--add/--remove/--clear/--list]` | edit sparse patterns + reconcile |
+| `picky sparse <list/add/remove/clear>` | edit sparse patterns + reconcile |
 | `picky status [<path>…]`        | table of pin, branch, sparse, filter, size, patches |
 | `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion) |
 | `picky completions <shell>`     | print the eval-able dynamic-completion registration script |
@@ -217,5 +245,5 @@ clones, idempotent re-init, pin bumps, and patch apply / fatal broken patch.
 
 ## Roadmap
 
-- A `submodule.<name>.postUpdate` hook (e.g. ducky's `OVERRIDE_GIT_DESCRIBE`
-  CMake rewrite is project-specific glue left out of v1).
+- Cone-mode sparse-checkout (picky defaults to non-cone, matching the reference
+  scripts).

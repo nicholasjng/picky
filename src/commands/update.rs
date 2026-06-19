@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::{git, patch, sparse};
+use crate::{git, hook, patch, sparse};
 
 pub fn run(
     root: &Path,
@@ -96,6 +96,8 @@ pub fn run(
     } else {
         patch::apply_stack(root, &sm, con)?
     };
+
+    hook::run_post_update(root, &sm, con)?;
 
     if bump {
         // Record the moved pin in the superproject index.

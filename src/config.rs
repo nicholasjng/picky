@@ -27,6 +27,9 @@ pub struct Submodule {
     pub filter: Option<String>,
     /// Directory holding the `*.patch` overlay stack, if any.
     pub patches: Option<String>,
+    /// Shell command run after the working tree is (re)materialized, if any.
+    /// The seam for project-specific glue like ducky's `OVERRIDE_GIT_DESCRIBE`.
+    pub post_update: Option<String>,
 }
 
 impl Submodule {
@@ -99,6 +102,7 @@ pub fn load(root: &Path, name: &str) -> Result<Submodule> {
         depth: get(root, &own("depth"))?.and_then(|s| s.parse().ok()),
         filter: get(root, &own("filter"))?,
         patches: get(root, &own("patches"))?,
+        post_update: get(root, &own("postUpdate"))?,
     })
 }
 
@@ -165,6 +169,9 @@ pub fn write(root: &Path, sm: &Submodule) -> Result<()> {
     }
     if let Some(patches) = &sm.patches {
         set(&own("patches"), patches)?;
+    }
+    if let Some(post_update) = &sm.post_update {
+        set(&own("postUpdate"), post_update)?;
     }
     // Multivalued: clear any prior list, then append each pattern.
     set_sparse(root, &sm.name, &sm.sparse)?;

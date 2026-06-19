@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::{git, sparse};
+use crate::{git, hook, sparse};
 
 pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     let targets: Vec<Submodule> = if paths.is_empty() {
@@ -35,6 +35,7 @@ pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
         con.detail(format!("git dir {}", gitdir.display()));
         sparse::ensure_commit(root, sm, &sha, con)?;
         sparse::checkout(root, sm, &sha, con)?;
+        hook::run_post_update(root, sm, con)?;
 
         match sparse::worktree_size(root, sm) {
             Some(size) => con.success(format!("{} ready ({size})", sm.path)),

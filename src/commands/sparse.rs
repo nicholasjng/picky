@@ -1,7 +1,7 @@
-//! `picky sparse <path> [--add <pat>]… [--remove <pat>]… [--clear] [--list]` —
-//! edit a submodule's sparse-checkout patterns and reconcile the checkout.
+//! `picky sparse <list|add|remove|clear>` — inspect and edit a submodule's
+//! sparse-checkout patterns, reconciling the checkout afterwards.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::path::Path;
 
 use crate::commands;
@@ -9,14 +9,19 @@ use crate::config;
 use crate::console::Console;
 use crate::git;
 
-#[allow(clippy::too_many_arguments)]
+/// What to do to the pattern list. `List` only reads; the rest mutate and
+/// (unless `no_reinit`) reconcile the checkout via `init`.
+pub enum Action {
+    List,
+    Add(Vec<String>),
+    Remove(Vec<String>),
+    Clear,
+}
+
 pub fn run(
     root: &Path,
     path: Option<String>,
-    add: Vec<String>,
-    remove: Vec<String>,
-    clear: bool,
-    list: bool,
+    action: Action,
     no_reinit: bool,
     con: &Console,
 ) -> Result<()> {
@@ -25,36 +30,40 @@ pub fn run(
         None => config::only(root)?,
     };
 
-    if list {
-        if sm.sparse.is_empty() {
-            con.plain(format!("{}: no sparse patterns (full checkout)", sm.path));
-        } else {
-            con.heading(format!("{} sparse patterns:", sm.path));
-            for p in &sm.sparse {
-                con.plain(format!("  {p}"));
+    // Resolve the action into the next pattern list (or print + return for List).
+    let mut patterns = match &action {
+        Action::List => {
+            if sm.sparse.is_empty() {
+                con.plain(format!("{}: no sparse patterns (full checkout)", sm.path));
+            } else {
+                con.heading(format!("{} sparse patterns:", sm.path));
+                for p in &sm.sparse {
+                    con.plain(format!("  {p}"));
+                }
+            }
+            return Ok(());
+        }
+        Action::Clear => Vec::new(),
+        Action::Add(_) | Action::Remove(_) => sm.sparse.clone(),
+    };
+
+    if let Action::Remove(remove) = &action {
+        for r in remove {
+            match patterns.iter().position(|p| p == r) {
+                Some(pos) => {
+                    patterns.remove(pos);
+                }
+                None => con.warn(format!("pattern not present, skipping: {r}")),
             }
         }
-        return Ok(());
     }
-
-    if add.is_empty() && remove.is_empty() && !clear {
-        bail!("nothing to do — pass --add, --remove, --clear, or --list");
-    }
-
-    let mut patterns = if clear { Vec::new() } else { sm.sparse.clone() };
-    for r in &remove {
-        match patterns.iter().position(|p| p == r) {
-            Some(pos) => {
-                patterns.remove(pos);
+    if let Action::Add(add) = &action {
+        for a in add {
+            if patterns.contains(a) {
+                con.warn(format!("pattern already present, skipping: {a}"));
+            } else {
+                patterns.push(a.clone());
             }
-            None => con.warn(format!("pattern not present, skipping: {r}")),
-        }
-    }
-    for a in &add {
-        if patterns.contains(a) {
-            con.warn(format!("pattern already present, skipping: {a}"));
-        } else {
-            patterns.push(a.clone());
         }
     }
 

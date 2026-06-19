@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::{git, sparse};
+use crate::{git, hook, sparse};
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -20,6 +20,7 @@ pub fn run(
     branch: Option<String>,
     reference: Option<String>,
     patches: Option<String>,
+    post_update: Option<String>,
     con: &Console,
 ) -> Result<()> {
     let sm = Submodule {
@@ -33,6 +34,7 @@ pub fn run(
         depth,
         filter,
         patches,
+        post_update,
     };
 
     con.heading(format!("adding submodule {}", sm.path));
@@ -46,6 +48,7 @@ pub fn run(
     let target = reference.as_deref().or(branch.as_deref()).unwrap_or("HEAD");
     sparse::fetch_ref(root, &sm, target, con)?;
     sparse::checkout(root, &sm, "FETCH_HEAD", con)?;
+    hook::run_post_update(root, &sm, con)?;
 
     // Record the gitlink in the superproject index. Suppress git's
     // "embedded git repository" hint — a gitlink is exactly what we want.

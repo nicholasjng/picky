@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod console;
 mod git;
+mod hook;
 mod patch;
 mod refcache;
 mod sparse;
@@ -162,6 +163,9 @@ enum Commands {
         /// Directory holding the patch stack
         #[arg(long)]
         patches: Option<String>,
+        /// Shell command to run after each checkout (post-update hook)
+        #[arg(long = "post-update")]
+        post_update: Option<String>,
         /// Section name in .gitmodules (defaults to <path>)
         #[arg(long)]
         name: Option<String>,
@@ -189,24 +193,8 @@ enum Commands {
     },
     /// Edit a submodule's sparse-checkout patterns and reconcile the checkout
     Sparse {
-        /// Submodule path (optional when only one submodule exists)
-        #[arg(add = ArgValueCandidates::new(submodule_candidates))]
-        path: Option<String>,
-        /// Pattern to add (repeatable)
-        #[arg(long)]
-        add: Vec<String>,
-        /// Pattern to remove (repeatable; exact match)
-        #[arg(long)]
-        remove: Vec<String>,
-        /// Remove all patterns (⇒ full checkout on next init)
-        #[arg(long)]
-        clear: bool,
-        /// List current patterns and exit
-        #[arg(long)]
-        list: bool,
-        /// Edit config only; don't re-run init
-        #[arg(long)]
-        no_reinit: bool,
+        #[command(subcommand)]
+        action: SparseAction,
     },
     /// Show a submodule status table
     Status {
@@ -224,6 +212,49 @@ enum Commands {
     Completions {
         /// Target shell
         shell: Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum SparseAction {
+    /// List the current sparse patterns
+    List {
+        /// Submodule path (optional when only one submodule exists)
+        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+        path: Option<String>,
+    },
+    /// Add one or more patterns and reconcile the checkout
+    Add {
+        /// Patterns to add
+        #[arg(required = true)]
+        patterns: Vec<String>,
+        /// Submodule path (optional when only one submodule exists)
+        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+        path: Option<String>,
+        /// Edit config only; don't re-run init
+        #[arg(long)]
+        no_reinit: bool,
+    },
+    /// Remove one or more patterns (exact match) and reconcile the checkout
+    Remove {
+        /// Patterns to remove
+        #[arg(required = true)]
+        patterns: Vec<String>,
+        /// Submodule path (optional when only one submodule exists)
+        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+        path: Option<String>,
+        /// Edit config only; don't re-run init
+        #[arg(long)]
+        no_reinit: bool,
+    },
+    /// Remove all patterns (⇒ full checkout) and reconcile the checkout
+    Clear {
+        /// Submodule path (optional when only one submodule exists)
+        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+        path: Option<String>,
+        /// Edit config only; don't re-run init
+        #[arg(long)]
+        no_reinit: bool,
     },
 }
 
@@ -258,9 +289,21 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             branch,
             reference,
             patches,
+            post_update,
             name,
         } => commands::add::run(
-            &root, url, path, name, sparse, depth, filter, branch, reference, patches, con,
+            &root,
+            url,
+            path,
+            name,
+            sparse,
+            depth,
+            filter,
+            branch,
+            reference,
+            patches,
+            post_update,
+            con,
         ),
         Commands::Init { paths } => commands::init::run(&root, &paths, con),
         Commands::Update {
@@ -269,14 +312,24 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             no_patches,
             depth,
         } => commands::update::run(&root, target, reference, no_patches, depth, con),
-        Commands::Sparse {
-            path,
-            add,
-            remove,
-            clear,
-            list,
-            no_reinit,
-        } => commands::sparse::run(&root, path, add, remove, clear, list, no_reinit, con),
+        Commands::Sparse { action } => {
+            use commands::sparse::Action;
+            let (path, op, no_reinit) = match action {
+                SparseAction::List { path } => (path, Action::List, false),
+                SparseAction::Add {
+                    patterns,
+                    path,
+                    no_reinit,
+                } => (path, Action::Add(patterns), no_reinit),
+                SparseAction::Remove {
+                    patterns,
+                    path,
+                    no_reinit,
+                } => (path, Action::Remove(patterns), no_reinit),
+                SparseAction::Clear { path, no_reinit } => (path, Action::Clear, no_reinit),
+            };
+            commands::sparse::run(&root, path, op, no_reinit, con)
+        }
         Commands::Status { paths } => commands::status::run(&root, &paths, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
         Commands::Completions { .. } => unreachable!("handled above"),

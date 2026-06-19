@@ -295,7 +295,7 @@ fn sparse_subcommand_widens_and_narrows() {
     assert!(!dep.join("keep").exists());
 
     // Widen: add /keep/ and reconcile.
-    let out = picky(&sup, &["sparse", "ext/dep", "--add", "/keep/"]);
+    let out = picky(&sup, &["sparse", "add", "/keep/", "-p", "ext/dep"]);
     assert!(
         out.status.success(),
         "{}",
@@ -317,7 +317,7 @@ fn sparse_subcommand_widens_and_narrows() {
     assert!(cfg.lines().any(|l| l == "/keep/"));
 
     // Narrow: remove /src/ and reconcile.
-    let out = picky(&sup, &["sparse", "ext/dep", "--remove", "/src/"]);
+    let out = picky(&sup, &["sparse", "remove", "/src/", "-p", "ext/dep"]);
     assert!(
         out.status.success(),
         "{}",
@@ -347,4 +347,55 @@ fn update_ref_completion_lists_remote_refs() {
     let only_v2 = complete(&sup, 3, &["picky", "update", "ext/dep", "v2"]);
     assert!(only_v2.iter().any(|r| r == "v2"));
     assert!(!only_v2.iter().any(|r| r == "v1"));
+}
+
+#[test]
+fn post_update_hook_runs_after_checkout() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    // A hook that records the env vars picky exposes to it.
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran",
+        ],
+    );
+
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The hook ran in the submodule worktree with the documented env vars.
+    let marker = sup.join("ext/dep/.picky-hook-ran");
+    assert!(marker.is_file(), "post-update hook should have run");
+    let head = git(&sup.join("ext/dep"), &["rev-parse", "HEAD"]);
+    let contents = std::fs::read_to_string(&marker).unwrap();
+    assert_eq!(contents.trim_end(), format!("ext/dep {head}"));
+}
+
+#[test]
+fn post_update_hook_failure_is_fatal() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            "exit 3",
+        ],
+    );
+
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        !out.status.success(),
+        "a failing post-update hook must fail the command"
+    );
 }
