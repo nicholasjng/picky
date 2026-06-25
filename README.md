@@ -1,34 +1,31 @@
 # picky
 
-A lightweight client for **sparse, shallow, blobless git submodule checkouts**.
+A lightweight tool for **sparse, shallow, blobless git submodule checkouts**.
 
 Projects often vendor a large dependency as a submodule but need only a fraction
 of its tree, its history, or its file contents. `picky` fetches only the history
 you ask for (`--depth`), only the objects you ask for (`--filter=blob:none`), and
-writes only the paths you ask for (non-cone sparse-checkout) — driven entirely by
+writes only the paths you ask for (non-cone sparse-checkout), driven entirely by
 declarative config committed to `.gitmodules`, so any checkout is reproducible
 from a single command. For the cases where a pristine checkout isn't quite
 enough, it also carries an optional working-tree patch stack and a post-update
 hook.
 
-`picky` shells out to the `git` CLI; it is a single binary with no libgit2
-dependency.
+`picky` shells out to the `git` CLI; it is a single binary with no libgit2 dependency.
 
 ## Motivating examples
 
-picky generalizes the hand-written `sh` setup scripts that several projects had
-each reinvented:
+picky generalizes the hand-written `sh` setup scripts that several of my projects had each reinvented:
 
 - **MLIR out of LLVM.** Building MLIR needs LLVM's core, `cmake/`, `third-party/`
-  and all of `mlir/` — but not clang, lldb, flang, the runtimes, or LLVM's
+  and all of `mlir/` - but not clang, lldb, flang, the runtimes, or LLVM's
   ~1.2 GB `test/` tree. A sparse, blobless, depth-1 checkout of
   `llvm/llvm-project` lands the working tree at **~310 MB instead of ~8 GB**.
 - **DuckDB with local patches.** A sparse checkout of `duckdb/duckdb` trims the
   working tree from **~280 MB to ~50 MB**, and a committed `patches/` stack is
   reapplied on top of each pinned upstream commit with `git apply --3way`.
 
-Both started as a bespoke script per repo; picky replaces them with one binary
-driven by a `.gitmodules` entry.
+Both started as a bespoke script per repo; picky replaces them with one binary driven by a `.gitmodules` entry.
 
 ## Install
 
@@ -37,11 +34,10 @@ driven by a `.gitmodules` entry.
 cargo install --git https://github.com/nicholasjng/picky
 
 # …or from a local clone of this repo
-cargo install --path .          # installs `picky` into ~/.cargo/bin
+cargo install --path .
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for
-`GIT_NO_LAZY_FETCH`) on `PATH` at runtime.
+Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for `GIT_NO_LAZY_FETCH`) on `PATH` at runtime.
 
 ## Quick start
 
@@ -63,12 +59,11 @@ picky add https://github.com/duckdb/duckdb.git ext/duckdb \
     --patches patches
 ```
 
-`add` writes the `.gitmodules` entry, builds the checkout, and stages both
-`.gitmodules` and the new gitlink — commit them to record the submodule.
+`add` writes the `.gitmodules` entry, builds the checkout, and stages both `.gitmodules` and the new gitlink - commit them to record the submodule.
 
 ## How it works
 
-For each submodule `picky`:
+For each submodule, `picky`:
 
 1. builds the submodule git dir under `.git/modules/<path>` (where `git
    submodule` expects it);
@@ -76,12 +71,12 @@ For each submodule `picky`:
    `remote.origin.promisor`, `partialclonefilter=blob:none`) and non-cone
    sparse-checkout (`core.sparseCheckout=true`, `core.sparseCheckoutCone=false`)
    **before** the first checkout, so unused paths are never written and their
-   blobs never downloaded;
+   blobs are never downloaded;
 3. fetches the pinned commit shallow + blobless if it isn't present;
 4. checks it out and runs `sparse-checkout reapply`.
 
 Blobs for in-sparse files are lazy-fetched from the promisor on checkout;
-out-of-sparse blobs are never fetched. Every command is idempotent — a fresh
+out-of-sparse blobs are never fetched. Every command is idempotent - a fresh
 clone, a half-finished run, or an existing full checkout all converge to the
 same state.
 
@@ -90,8 +85,7 @@ same state.
 `picky` reads and writes `.gitmodules` via `git config -f`, splitting keys
 across two sections joined by the shared subsection name. Git's **standard**
 keys stay in the `submodule.<name>` section it understands; picky's **own**
-options live in a parallel `picky.<name>` section that stock git ignores
-entirely.
+options live in a parallel `picky.<name>` section that stock git ignores entirely.
 
 | Key | Section | Meaning |
 |---|---|---|
@@ -105,20 +99,20 @@ entirely.
 | `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
 | `picky.<name>.postUpdate`  | picky | shell command run after each checkout (post-update hook) |
 
-The `picky.<name>` section holds **only** the options git doesn't understand —
+The `picky.<name>` section holds **only** the options git doesn't understand -
 nothing is duplicated from the `submodule.<name>` section. The pin (gitlink SHA)
-lives where git already keeps it — the superproject tree (`git ls-files -s
+lives where git already keeps it - the superproject tree (`git ls-files -s
 <path>`); no extra config file is introduced.
 
 Example:
 
 ```ini
-[submodule "ext/duckdb"]      # git's section — git's keys only
+[submodule "ext/duckdb"]
 	path = ext/duckdb
 	url = https://github.com/duckdb/duckdb.git
 	branch = main
 	shallow = true
-[picky "ext/duckdb"]          # picky's section — only what git doesn't know
+[picky "ext/duckdb"]
 	sparse = /src/
 	sparse = /third_party/
 	sparse = /extension/parquet/
@@ -152,11 +146,10 @@ with metacharacters like `/extension/*.cmake` work without the `git config
 
 `set`, `add`, and `remove` can read newline-delimited patterns from a file
 (`--from <file>`) or stdin (`--stdin`) instead of (or in addition to) positional
-arguments — handy for a long list. Blank lines and `#` comments are skipped, so
+arguments - handy for a long list. Blank lines and `#` comments are skipped, so
 a pattern file doubles as documentation:
 
 ```sh
-# replace the whole list from a heredoc — no per-pattern quoting, no loop
 picky sparse set -p ext/duckdb --stdin <<'EOF'
 # CMake glue
 /CMakeLists.txt
@@ -192,11 +185,10 @@ tree for you to resolve. Skip the stack with `picky update --no-patches`.
 
 ## Post-update hook
 
-A submodule may declare `picky.<name>.postUpdate` — a shell command run after
+A submodule may declare `picky.<name>.postUpdate` - a shell command run after
 its working tree is (re)materialized by `add`, `init`, or `update` (in the latter
 case, after the patch stack). It runs through `sh -c` **in the submodule's
-working tree**, and a non-zero exit is fatal. This is the seam for
-project-specific glue such as ducky's `OVERRIDE_GIT_DESCRIBE` CMake rewrite.
+working tree**, and a non-zero exit is fatal.
 
 These environment variables are exported to the hook:
 
@@ -233,13 +225,11 @@ detection. Run `picky <command> --help` for the full option list.
 matches a submodule path is treated as the path (refresh at current pin);
 otherwise it's treated as a ref against the lone submodule.
 
-A bump fetches **only the target ref**, shallow + blobless — like `add` — so the
+A bump fetches **only the target ref**, shallow + blobless - like `add` - so the
 object store stays small and no history is downloaded. Pass `--unshallow` to
 instead fetch the full history and all tags (needed for `git describe`); note
 that on a large repo this fattens the (still blobless) object store with every
-tree and commit, which is rarely what you want — prefer a static version string
-(e.g. a `postUpdate` hook that stamps `<version>-0-g<short-sha>`) over relying on
-`git describe`.
+tree and commit, which is rarely what you want.
 
 ## Shell completions
 
@@ -265,8 +255,7 @@ You then get `<TAB>` completion on submodule paths (`init`, `update`, `sparse`,
 ## Use as a library
 
 picky is published as both a binary and a library, so you can drive the
-sparse-checkout engine from Rust (e.g. a Tauri backend) instead of shelling out
-to the CLI:
+sparse-checkout engine from Rust instead of shelling out to the CLI:
 
 ```toml
 [dependencies]
@@ -291,12 +280,12 @@ picky::update(                                    // bump one
 
 The high-level helpers (`init`, `update`, `set_sparse`, …) and the full module
 surface (`picky::commands`, `picky::config`, `picky::sparse`, …) take a
-`Console` for progress output. Pick one:
+`Console` for progress output. Pick one of:
 
-- `Console::new(quiet, verbose)` — colored output to stdout/stderr (the CLI
+- `Console::new(quiet, verbose)` - colored output to stdout/stderr (the CLI
   default).
-- `Console::silent()` — discards everything (the `/dev/null` sink).
-- `Console::with_sink(|level, msg| …)` — forward each message to your own sink
+- `Console::silent()` - discards everything (the `/dev/null` sink).
+- `Console::with_sink(|level, msg| …)` - forward each message to your own sink
   (a channel, a Tauri event, a log) as a `(Level, &str)` pair:
 
 ```rust
@@ -308,8 +297,8 @@ let con = picky::Console::with_sink(move |level, msg: &str| {
 // drive picky with `&con`, drain `rx` to render progress in your UI
 ```
 
-`Console` is `Send + Sync`, so it can live in shared application state. The
-`git` CLI must be on `PATH` at runtime, as for the binary.
+`Console` is `Send + Sync`, so it can live in shared application state. 
+The `git` CLI must be on `PATH` at runtime, as for the binary.
 
 ## Local development
 
