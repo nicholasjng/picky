@@ -262,6 +262,55 @@ installed and on your `PATH` for completion to work.
 You then get `<TAB>` completion on submodule paths (`init`, `update`, `sparse`,
 `status`) and on remote tags/branches for `picky update <path> <TAB>`.
 
+## Use as a library
+
+picky is published as both a binary and a library, so you can drive the
+sparse-checkout engine from Rust (e.g. a Tauri backend) instead of shelling out
+to the CLI:
+
+```toml
+[dependencies]
+picky = { git = "https://github.com/nicholasjng/picky" }
+# add the `serde` feature for Serialize/Deserialize on `Submodule` and `Level`:
+picky = { git = "https://github.com/nicholasjng/picky", features = ["serde"] }
+```
+
+```rust
+use picky::Console;
+
+let root = picky::repo_root()?;
+for sm in picky::submodules(&root)? {            // -> Vec<picky::Submodule>
+    println!("{} @ {}", sm.path, sm.url);
+}
+picky::init(&root, &[], &Console::silent())?;     // reconstruct every submodule
+picky::update(                                    // bump one
+    &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
+    /*no_patches*/ false, /*unshallow*/ false, /*depth*/ None, &Console::silent(),
+)?;
+```
+
+The high-level helpers (`init`, `update`, `set_sparse`, …) and the full module
+surface (`picky::commands`, `picky::config`, `picky::sparse`, …) take a
+`Console` for progress output. Pick one:
+
+- `Console::new(quiet, verbose)` — colored output to stdout/stderr (the CLI
+  default).
+- `Console::silent()` — discards everything (the `/dev/null` sink).
+- `Console::with_sink(|level, msg| …)` — forward each message to your own sink
+  (a channel, a Tauri event, a log) as a `(Level, &str)` pair:
+
+```rust
+use std::sync::mpsc;
+let (tx, rx) = mpsc::channel::<(picky::Level, String)>();
+let con = picky::Console::with_sink(move |level, msg: &str| {
+    let _ = tx.send((level, msg.to_owned()));
+});
+// drive picky with `&con`, drain `rx` to render progress in your UI
+```
+
+`Console` is `Send + Sync`, so it can live in shared application state. The
+`git` CLI must be on `PATH` at runtime, as for the binary.
+
 ## Local development
 
 ```sh
