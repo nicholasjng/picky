@@ -1,7 +1,6 @@
 pub mod add;
 pub mod completions;
 pub mod doctor;
-pub mod gc;
 pub mod init;
 pub mod refresh;
 pub mod remove;

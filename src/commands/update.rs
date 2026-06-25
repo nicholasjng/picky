@@ -2,6 +2,7 @@
 //! the patch stack. The `bump-duckdb.sh` equivalent.
 
 use anyhow::{Context, Result, bail};
+use std::fs;
 use std::path::Path;
 
 use crate::config::{self, Submodule};
@@ -17,6 +18,7 @@ pub fn run(
     unshallow: bool,
     depth: Option<u32>,
     all: bool,
+    fresh: bool,
     con: &Console,
 ) -> Result<()> {
     if all {
@@ -32,7 +34,7 @@ pub fn run(
         }
         for sm in targets {
             con.heading(format!("submodule {}", sm.path));
-            update_one(root, sm, None, no_patches, unshallow, depth, con)?;
+            update_one(root, sm, None, no_patches, unshallow, depth, fresh, con)?;
         }
         return Ok(());
     }
@@ -48,11 +50,12 @@ pub fn run(
         },
         (None, _) => (config::only(root)?, None),
     };
-    update_one(root, sm, refarg, no_patches, unshallow, depth, con)
+    update_one(root, sm, refarg, no_patches, unshallow, depth, fresh, con)
 }
 
 /// Bump (or, with `refarg: None`, just refresh) a single submodule: fetch if
 /// needed, re-checkout, re-apply the patch stack, run the post-update hook.
+#[allow(clippy::too_many_arguments)]
 fn update_one(
     root: &Path,
     mut sm: Submodule,
@@ -60,6 +63,7 @@ fn update_one(
     no_patches: bool,
     unshallow: bool,
     depth: Option<u32>,
+    fresh: bool,
     con: &Console,
 ) -> Result<()> {
     if let Some(d) = depth {
@@ -88,7 +92,23 @@ fn update_one(
 
     let mut refish = refarg.unwrap_or_else(|| old_sha.clone());
 
-    if bump {
+    if fresh {
+        // `git gc` can never reclaim a partial clone's old packs,
+        // so the only way to bound the object store across repeated bumps
+        // is to throw the git dir away and refetch just the target commit.
+        con.step("Rebuilding from scratch (--fresh)");
+        if wt.exists() {
+            fs::remove_dir_all(&wt)?;
+        }
+        if let Ok(gitdir) = sparse::gitdir(root, &sm)
+            && gitdir.exists()
+        {
+            fs::remove_dir_all(&gitdir)?;
+        }
+        sparse::prepare(root, &sm, con)?;
+    }
+
+    if bump || fresh {
         if unshallow {
             // Opt-in: full history + all tags for `git describe`; fattens the
             // (blobless) object store with every tree/commit on a big repo.

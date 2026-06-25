@@ -200,6 +200,13 @@ enum Commands {
         /// can't be combined with a path or ref
         #[arg(long, conflicts_with_all = ["target", "reference"])]
         all: bool,
+        /// Wipe the git dir and rebuild from scratch at the target instead of
+        /// fetching on top of what's already there. `git gc` can never
+        /// reclaim a partial clone's old packs, so this is the only way to
+        /// bound the object store to one fetch's worth regardless of how
+        /// many prior bumps happened
+        #[arg(long)]
+        fresh: bool,
     },
     /// Edit a submodule's sparse-checkout patterns and reconcile the checkout
     Sparse {
@@ -232,14 +239,6 @@ enum Commands {
         /// Exit 1 if any issues are found (for a pre-commit hook or CI check)
         #[arg(long)]
         strict: bool,
-    },
-    /// Deterministically prune each submodule's object store (`git gc
-    /// --prune=now`); no args ⇒ all submodules. See PICKY_AUTO_GC for an
-    /// opt-in `gc --auto` after every fetch instead
-    Gc {
-        /// Submodule paths to gc (no args ⇒ all)
-        #[arg(add = ArgValueCandidates::new(submodule_candidates))]
-        paths: Vec<String>,
     },
 }
 
@@ -370,8 +369,9 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             unshallow,
             depth,
             all,
+            fresh,
         } => commands::update::run(
-            &root, target, reference, no_patches, unshallow, depth, all, con,
+            &root, target, reference, no_patches, unshallow, depth, all, fresh, con,
         ),
         Commands::Sparse { action } => {
             use commands::sparse::{self, Action};
@@ -414,7 +414,6 @@ fn run(command: Commands, con: &Console) -> Result<()> {
         Commands::Status { paths, json } => commands::status::run(&root, &paths, json, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
         Commands::Doctor { strict } => commands::doctor::run(&root, strict, con),
-        Commands::Gc { paths } => commands::gc::run(&root, &paths, con),
         Commands::Completions { .. } => unreachable!("handled above"),
     }
 }

@@ -27,7 +27,7 @@
 //! picky::init(&root, &[], &Console::silent())?;              // reconstruct all
 //! picky::update(                                             // bump one
 //!     &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
-//!     false, false, None, false, &Console::silent(),
+//!     false, false, None, false, false, &Console::silent(),
 //! )?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
@@ -83,10 +83,11 @@ pub fn update(
     unshallow: bool,
     depth: Option<u32>,
     all: bool,
+    fresh: bool,
     con: &Console,
 ) -> Result<()> {
     commands::update::run(
-        root, target, reference, no_patches, unshallow, depth, all, con,
+        root, target, reference, no_patches, unshallow, depth, all, fresh, con,
     )
 }
 
