@@ -142,7 +142,27 @@ for error context. **No libgit2.**
   CVE-2015-7545, where a `.gitmodules`-sourced `submodule.<name>.update = !cmd`
   ran arbitrary commands). Approval is recorded verbatim in local, untracked
   config (`picky.<name>.trustedPostUpdate`); non-interactive runs need a prior
-  approval or `PICKY_TRUST_HOOKS=1`.)
+  approval or `PICKY_TRUST_HOOKS=1`.
+- `add.rs` ordering fix — the checkout (`sparse::prepare`/`fetch_ref`/`checkout`/
+  the post-update hook) now runs entirely off the in-memory `Submodule` before
+  anything touches `.gitmodules` on disk; a failed `add` used to stage a
+  `.gitmodules` entry with no working gitlink behind it.
+- `picky remove <path>…` — the inverse of `add`: deletes the working tree and
+  submodule git dir, drops the gitlink from the index (`git rm --cached`),
+  best-effort `git submodule deinit`s the local registration, and strips the
+  `submodule.<name>`/`picky.<name>` sections from `.gitmodules` via the new
+  `config::remove`, staging the result. No implicit "remove all" — paths are
+  required.
+- `config::write` made declarative — `set_or_unset` clears an optional key
+  (`branch`, `shallow`, `depth`, `filter`, `patches`, `postUpdate`) when the
+  new value is absent, instead of only ever setting it. Re-running `add` over
+  an existing name now converges to exactly the new args rather than unioning
+  old and new (a stale `--branch`/`--depth` used to survive a re-add that
+  omitted them).
+- `update.rs` default-bump fetch failures now carry a `--unshallow` hint —
+  many git servers refuse to fetch an arbitrary commit SHA directly (only
+  advertised branch/tag tips), which the default (shallow, single-ref) bump
+  path used to surface as a bare git exit-status error with no guidance.)
 
 ## Verification
 

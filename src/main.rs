@@ -168,6 +168,12 @@ enum Commands {
         #[arg(add = ArgValueCandidates::new(submodule_candidates))]
         paths: Vec<String>,
     },
+    /// Undeclare a submodule and delete its checkout (the inverse of `add`)
+    Remove {
+        /// Submodule paths to remove — required, no implicit "remove all"
+        #[arg(add = ArgValueCandidates::new(submodule_candidates))]
+        paths: Vec<String>,
+    },
     /// Bump a submodule pin / re-checkout / re-apply the patch stack
     Update {
         /// Submodule path, or a ref when only one submodule exists
@@ -329,6 +335,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             con,
         ),
         Commands::Init { paths } => commands::init::run(&root, &paths, con),
+        Commands::Remove { paths } => commands::remove::run(&root, &paths, con),
         Commands::Update {
             target,
             reference,

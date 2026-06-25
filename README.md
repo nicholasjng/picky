@@ -37,7 +37,7 @@ cargo install --git https://github.com/nicholasjng/picky
 cargo install --path .
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for `GIT_NO_LAZY_FETCH`) on `PATH` at runtime.
+Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for `GIT_NO_LAZY_FETCH`) on `PATH` at runtime, plus a Unix-like shell environment (`sh` for the post-update hook, `du` for working-tree sizing in `status`/`add`) — Linux, macOS, WSL, or Git Bash. Native Windows (cmd/PowerShell without WSL) is not supported.
 
 ## Quick start
 
@@ -59,7 +59,20 @@ picky add https://github.com/duckdb/duckdb.git ext/duckdb \
     --patches patches
 ```
 
-`add` writes the `.gitmodules` entry, builds the checkout, and stages both `.gitmodules` and the new gitlink - commit them to record the submodule.
+`add` builds the checkout first; only once it succeeds does it write `.gitmodules`
+and stage both it and the new gitlink - commit them to record the submodule. A
+failed `add` (bad URL, bad `--ref`, network) leaves no trace in `.gitmodules`.
+
+Removing a submodule is the inverse:
+
+```sh
+picky remove ext/duckdb
+```
+
+This deletes the working tree and the submodule's git dir, drops the gitlink
+from the index, and strips its `submodule.<name>`/`picky.<name>` sections from
+`.gitmodules` - staging all of it for you to commit. There's no bare `picky
+remove` with no args; paths are always explicit.
 
 ## How it works
 
@@ -233,6 +246,7 @@ content.
 | Command | Purpose |
 |---|---|
 | `picky add <url> <path> [opts]` | declare + check out a new sparse submodule |
+| `picky remove <path>…`          | undeclare a submodule and delete its checkout (the inverse of `add`) |
 | `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
 | `picky sparse <list/add/remove/set/clear>` | edit sparse patterns + reconcile |

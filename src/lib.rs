@@ -61,6 +61,12 @@ pub fn init(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     commands::init::run(root, paths, con)
 }
 
+/// Undeclare submodule(s) and delete their checkouts — the inverse of
+/// [`commands::add::run`]. `paths` must be non-empty; there is no "remove all".
+pub fn remove(root: &Path, paths: &[String], con: &Console) -> Result<()> {
+    commands::remove::run(root, paths, con)
+}
+
 /// Bump the pin / re-checkout / re-apply the patch stack. See
 /// [`commands::update::run`] for the positional and flag semantics.
 pub fn update(

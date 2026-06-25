@@ -122,16 +122,20 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
-/// Build an upstream repo (two commits, tags v1/v2), a bare filter-allowing
-/// remote, and a superproject pinning `ext/dep` at v1 with sparse `/keep/` +
-/// `/src/`. Returns (tmp, super_dir, v1_sha).
-fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) {
+/// Build an upstream repo (two commits, tags v1/v2) and a bare local
+/// `file://` remote allowing partial clones + arbitrary-SHA fetches. Returns
+/// (tmp, remote `file://` URL, v1 SHA). Shared by [`fixture`] (which also
+/// declares + commits a submodule pointing at it) and tests that exercise the
+/// declaration step themselves (`add`, `remove`).
+fn remote_fixture() -> (TmpDir, String, String) {
     let tmp = TmpDir::new();
     let root = tmp.path().to_path_buf();
 
     let up = root.join("up");
     std::fs::create_dir_all(&up).unwrap();
-    git(&up, &["init", "-q"]);
+    // Pin the default branch name explicitly — tests reference it by name
+    // and shouldn't depend on the runner's `init.defaultBranch`.
+    git(&up, &["init", "-q", "-b", "main"]);
     write(&up.join("keep/a.txt"), "keep\n");
     write(&up.join("drop/b.txt"), "drop\n");
     write(&up.join("src/c.txt"), "line1\nline2\nline3\n");
@@ -159,6 +163,17 @@ fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) 
         &["config", "uploadpack.allowanysha1inwant", "true"],
     );
 
+    let url = format!("file://{}", remote.display());
+    (tmp, url, v1)
+}
+
+/// [`remote_fixture`] plus a superproject that already declares + commits
+/// `ext/dep` pinned at v1 with the given sparse patterns. Returns (tmp,
+/// super_dir, v1_sha).
+fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) {
+    let (tmp, url, v1) = remote_fixture();
+    let root = tmp.path().to_path_buf();
+
     let sup = root.join("super");
     std::fs::create_dir_all(&sup).unwrap();
     git(&sup, &["init", "-q"]);
@@ -171,7 +186,6 @@ fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) 
             &format!("160000,{v1},ext/dep"),
         ],
     );
-    let url = format!("file://{}", remote.display());
     git(
         &sup,
         &[
@@ -219,6 +233,15 @@ fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) 
     git(&sup, &["commit", "-qm", "sub"]);
 
     (tmp, sup, v1)
+}
+
+/// A fresh, empty superproject under `remote_fixture`'s tmp root — nothing
+/// declared yet, for tests that exercise `add`/`remove` themselves.
+fn empty_super(tmp: &TmpDir) -> PathBuf {
+    let sup = tmp.path().join("super");
+    std::fs::create_dir_all(&sup).unwrap();
+    git(&sup, &["init", "-q"]);
+    sup
 }
 
 #[test]
@@ -289,6 +312,148 @@ fn init_rebuilds_after_gitdir_deleted() {
 }
 
 #[test]
+fn add_declares_and_checks_out_a_new_submodule() {
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    let out = picky(
+        &sup,
+        &["add", &url, "ext/dep", "--sparse", "/src/", "--ref", "v1"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Sparse checkout materialized at the requested ref.
+    assert!(sup.join("ext/dep/src").is_dir());
+    assert!(
+        !sup.join("ext/dep/drop").exists(),
+        "unlisted path should not materialize"
+    );
+    assert_eq!(git(&sup.join("ext/dep"), &["rev-parse", "HEAD"]), v1);
+
+    // .gitmodules written and both it and the gitlink staged.
+    let staged = git(&sup, &["diff", "--cached", "--name-only"]);
+    assert!(
+        staged.lines().any(|l| l == ".gitmodules"),
+        "staged: {staged}"
+    );
+    assert!(staged.lines().any(|l| l == "ext/dep"), "staged: {staged}");
+    let cfg_url = git(
+        &sup,
+        &["config", "-f", ".gitmodules", "--get", "submodule.ext/dep.url"],
+    );
+    assert_eq!(cfg_url, url);
+}
+
+#[test]
+fn add_failure_leaves_no_partial_gitmodules_state() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    // A ref that doesn't exist on the remote makes the fetch fail.
+    let out = picky(&sup, &["add", &url, "ext/dep", "--ref", "does-not-exist"]);
+    assert!(!out.status.success(), "add with a bad ref should fail");
+
+    // `.gitmodules` must never have been written, and nothing staged.
+    assert!(
+        !sup.join(".gitmodules").exists(),
+        ".gitmodules should not exist after a failed add"
+    );
+    let staged = git(&sup, &["diff", "--cached", "--name-only"]);
+    assert!(
+        staged.is_empty(),
+        "nothing should be staged after a failed add, got: {staged}"
+    );
+}
+
+#[test]
+fn add_rerun_clears_stale_optional_keys() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    let out = picky(
+        &sup,
+        &["add", &url, "ext/dep", "--branch", "main", "--depth", "1"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cfg = git(&sup, &["config", "-f", ".gitmodules", "--list"]);
+    assert!(cfg.contains("submodule.ext/dep.branch=main"), "{cfg}");
+    assert!(cfg.contains("picky.ext/dep.depth=1"), "{cfg}");
+
+    // Re-add the same path without --branch/--depth: the declaration must
+    // converge to exactly the new args, not keep the old values around.
+    let out = picky(&sup, &["add", &url, "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cfg = git(&sup, &["config", "-f", ".gitmodules", "--list"]);
+    assert!(
+        !cfg.contains("branch"),
+        "stale branch should have been cleared, got: {cfg}"
+    );
+    assert!(
+        !cfg.contains("depth"),
+        "stale depth should have been cleared, got: {cfg}"
+    );
+}
+
+#[test]
+fn remove_deletes_checkout_and_undeclares_submodule() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert!(dep.join("src").is_dir());
+    let gitdir = sup.join(".git/modules/ext/dep");
+    assert!(gitdir.is_dir());
+
+    let out = picky(&sup, &["remove", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(!dep.exists(), "working tree should be deleted");
+    assert!(!gitdir.exists(), "submodule git dir should be deleted");
+    assert!(
+        git(&sup, &["ls-files", "ext/dep"]).is_empty(),
+        "gitlink should be dropped from the index"
+    );
+    let cfg = git(&sup, &["config", "-f", ".gitmodules", "--list"]);
+    assert!(
+        !cfg.contains("ext/dep"),
+        ".gitmodules should have no trace of ext/dep left, got: {cfg}"
+    );
+
+    // Staged, ready to commit — nothing left dangling.
+    let staged = git(&sup, &["diff", "--cached", "--name-only"]);
+    assert!(staged.lines().any(|l| l == ".gitmodules"));
+    assert!(staged.lines().any(|l| l == "ext/dep"));
+}
+
+#[test]
+fn remove_requires_explicit_paths() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let out = picky(&sup, &["remove"]);
+    assert!(!out.status.success(), "remove with no paths should fail");
+    // Nothing was touched — the declaration is still there.
+    let path_cfg = git(
+        &sup,
+        &["config", "-f", ".gitmodules", "--get", "submodule.ext/dep.path"],
+    );
+    assert_eq!(path_cfg, "ext/dep", "declaration should be untouched");
+}
+
+#[test]
 fn update_moves_the_pin() {
     let (_tmp, sup, v1) = fixture(&["/src/"], None);
     let dep = sup.join("ext/dep");
@@ -338,6 +503,30 @@ fn update_unshallow_flag_fetches_history() {
         "--unshallow must fetch full history"
     );
     assert_eq!(git(&dep, &["describe", "--tags"]), "v2");
+}
+
+#[test]
+fn update_bad_ref_fetch_suggests_unshallow() {
+    // A real git server commonly rejects a default (shallow, single-ref)
+    // bump when the target is a commit SHA it won't fetch directly rather
+    // than an advertised branch/tag (`uploadpack.allow*SHA1InWant`) — but
+    // `file://` remotes use git's local-clone optimization and never
+    // enforce that restriction, so it can't be reproduced through this
+    // fixture. What's testable end-to-end is the error translation itself:
+    // any failure of the default bump's targeted fetch must carry the
+    // `--unshallow` hint, which this (deterministically nonexistent) SHA
+    // exercises via the same code path.
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let bogus = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    let out = picky(&sup, &["update", "ext/dep", bogus]);
+    assert!(!out.status.success(), "fetching a nonexistent SHA should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--unshallow"),
+        "expected a hint to retry with --unshallow, got: {stderr}"
+    );
 }
 
 #[test]
