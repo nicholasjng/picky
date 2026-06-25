@@ -27,7 +27,7 @@ fn submodule_candidates() -> Vec<CompletionCandidate> {
 /// fresh cache instantly; stale cache instantly + a detached background
 /// refresh; no cache ⇒ one 2s-bounded `ls-remote`, decaying to local refs.
 fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
-    let mut refs = match refcache::read(&sm.url) {
+    let pairs = match refcache::read(&sm.url) {
         Some(c) if c.fresh => c.refs,
         Some(c) => {
             spawn_bg_refresh(&sm.path);
@@ -41,6 +41,7 @@ fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
             None => refcache::local_refs(root, &sm.path),
         },
     };
+    let mut refs: Vec<String> = pairs.into_iter().map(|(name, _sha)| name).collect();
     refs.sort();
     refs.dedup();
     refs
@@ -91,8 +92,8 @@ fn update_ref_candidates() -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// Completion for `update`'s first positional: submodule paths, plus — when
-/// there is exactly one submodule — its refs (the `update <ref>` shorthand).
+/// Completion for `update`'s first positional: submodule paths, plus (when
+/// there is exactly one submodule) its refs (the `update <ref>` shorthand).
 fn update_target_candidates() -> Vec<CompletionCandidate> {
     let Ok(root) = git::repo_root() else {
         return Vec::new();
@@ -210,6 +211,9 @@ enum Commands {
         /// Submodule paths to report (no args ⇒ all)
         #[arg(add = ArgValueCandidates::new(submodule_candidates))]
         paths: Vec<String>,
+        /// Emit a JSON array instead of a table
+        #[arg(long)]
+        json: bool,
     },
     /// Refresh the cached remote ref list used by `<ref>` completion
     Refresh {
@@ -320,6 +324,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
         return commands::completions::run(shell);
     }
 
+    git::check_version()?;
     let root = git::repo_root()?;
 
     match command {
@@ -356,7 +361,10 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             no_patches,
             unshallow,
             depth,
-        } => commands::update::run(&root, target, reference, no_patches, unshallow, depth, con),
+            all,
+        } => commands::update::run(
+            &root, target, reference, no_patches, unshallow, depth, all, con,
+        ),
         Commands::Sparse { action } => {
             use commands::sparse::{self, Action};
             let (path, op, no_reinit) = match action {
@@ -395,7 +403,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             };
             sparse::run(&root, path, op, no_reinit, con)
         }
-        Commands::Status { paths } => commands::status::run(&root, &paths, con),
+        Commands::Status { paths, json } => commands::status::run(&root, &paths, json, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
         Commands::Doctor { strict } => commands::doctor::run(&root, strict, con),
         Commands::Completions { .. } => unreachable!("handled above"),

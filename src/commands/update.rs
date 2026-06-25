@@ -1,5 +1,5 @@
-//! `picky update [<path>] [<ref>] …` — bump the pin / re-checkout / re-apply the
-//! patch stack. The `bump-duckdb.sh` equivalent.
+//! `picky update [<path>] [<ref>] …`: bump the pin / re-checkout / re-apply
+//! the patch stack. The `bump-duckdb.sh` equivalent.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -8,6 +8,7 @@ use crate::config::{self, Submodule};
 use crate::console::Console;
 use crate::{git, hook, patch, sparse};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     root: &Path,
     arg1: Option<String>,
@@ -15,12 +16,31 @@ pub fn run(
     no_patches: bool,
     unshallow: bool,
     depth: Option<u32>,
+    all: bool,
     con: &Console,
 ) -> Result<()> {
+    if all {
+        if arg1.is_some() || arg2.is_some() {
+            bail!(
+                "--all refreshes every submodule at its current pin and can't be combined with a path or ref"
+            );
+        }
+        let targets = config::load_all(root)?;
+        if targets.is_empty() {
+            con.warn("no submodules declared in .gitmodules");
+            return Ok(());
+        }
+        for sm in targets {
+            con.heading(format!("submodule {}", sm.path));
+            update_one(root, sm, None, no_patches, unshallow, depth, con)?;
+        }
+        return Ok(());
+    }
+
     // Resolve the two optional positionals into (submodule, ref). With two
     // args it is unambiguous; with one, a value matching a submodule is a path
     // (refresh), otherwise it is a ref against the lone submodule.
-    let (mut sm, refarg): (Submodule, Option<String>) = match (arg1, arg2) {
+    let (sm, refarg): (Submodule, Option<String>) = match (arg1, arg2) {
         (Some(a), Some(b)) => (config::find(root, &a)?, Some(b)),
         (Some(a), None) => match config::find(root, &a) {
             Ok(sm) => (sm, None),
@@ -28,6 +48,20 @@ pub fn run(
         },
         (None, _) => (config::only(root)?, None),
     };
+    update_one(root, sm, refarg, no_patches, unshallow, depth, con)
+}
+
+/// Bump (or, with `refarg: None`, just refresh) a single submodule: fetch if
+/// needed, re-checkout, re-apply the patch stack, run the post-update hook.
+fn update_one(
+    root: &Path,
+    mut sm: Submodule,
+    refarg: Option<String>,
+    no_patches: bool,
+    unshallow: bool,
+    depth: Option<u32>,
+    con: &Console,
+) -> Result<()> {
     if let Some(d) = depth {
         sm.depth = Some(d);
     }
@@ -35,7 +69,7 @@ pub fn run(
     let wt = root.join(&sm.path);
     if !wt.join(".git").exists() {
         bail!(
-            "{0} is not checked out — run `picky init {0}` first",
+            "{0} is not checked out, run `picky init {0}` first",
             sm.path
         );
     }
@@ -89,19 +123,19 @@ pub fn run(
             }
         } else {
             // Default: fetch only the target ref, shallow + blobless (like
-            // `add`) — no history download, and a bare branch lands on the fresh
+            // `add`), no history download; a bare branch lands on the fresh
             // remote tip via FETCH_HEAD (no stale-local-ref footgun).
             //
             // Caveat: many git servers refuse to fetch an arbitrary commit SHA
             // directly unless it's an advertised branch/tag tip
             // (`uploadpack.allowReachableSHA1InWant`/`allowAnySHA1InWant`
-            // unset) — `--unshallow` sidesteps this by fetching full history
+            // unset). `--unshallow` sidesteps this by fetching full history
             // instead, so the SHA is already present locally to check out.
             sparse::fetch_ref(root, &sm, &refish, con).with_context(|| {
                 format!(
-                    "fetching '{refish}' failed — if it's a commit SHA, the \
+                    "fetching '{refish}' failed; if it's a commit SHA, the \
                      remote may be refusing to fetch it directly (only \
-                     advertised branch/tag tips); try \
+                     advertised branch/tag tips), try \
                      `picky update {} {refish} --unshallow` to fetch full \
                      history and resolve it from there",
                     sm.path
@@ -149,7 +183,7 @@ pub fn run(
     ));
     if bump {
         con.plain(format!(
-            "  staged gitlink — commit {} to record the pin",
+            "  staged gitlink, commit {} to record the pin",
             sm.path
         ));
     }
