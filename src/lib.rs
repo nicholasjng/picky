@@ -8,25 +8,25 @@
 //! below ([`init`], [`update`], [`set_sparse`], …) call into them. Each takes a
 //! [`Console`] for progress output — pass [`quiet`] when you don't want any.
 //!
-//! Two things to know for a GUI integration:
+//! Two things for a GUI integration:
 //!
-//! - Output currently goes to the process's stdout/stderr (via `anstream`), not
-//!   a return value. To render progress in-app, make [`console`] write to a
-//!   pluggable sink (a callback/channel) instead of `anstream::println!`.
-//! - [`Submodule`] is plain data; derive `serde::Serialize` for it (behind a
-//!   feature) to hand it straight to a Tauri command's frontend.
+//! - To render progress in-app instead of on stdout/stderr, build the console
+//!   with [`Console::with_sink`] and pass a `Fn(Level, &str)` (or a [`Sink`])
+//!   that forwards each message to a channel or a Tauri event.
+//! - Enable the `serde` feature for `Serialize`/`Deserialize` on [`Submodule`]
+//!   and [`Level`], so they cross a Tauri command boundary directly.
 //!
 //! ```no_run
-//! use std::path::Path;
+//! use picky::Console;
 //!
 //! let root = picky::repo_root()?;
 //! for sm in picky::submodules(&root)? {
 //!     println!("{} @ {}", sm.path, sm.url);
 //! }
-//! picky::init(&root, &[], &picky::quiet())?;                 // reconstruct all
+//! picky::init(&root, &[], &Console::silent())?;              // reconstruct all
 //! picky::update(                                             // bump one
 //!     &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
-//!     false, false, None, &picky::quiet(),
+//!     false, false, None, &Console::silent(),
 //! )?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
@@ -41,16 +41,10 @@ pub mod refcache;
 pub mod sparse;
 
 pub use config::Submodule;
-pub use console::Console;
+pub use console::{Console, Level, Sink};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-
-/// A [`Console`] that suppresses progress output — the usual choice for an
-/// embedder that doesn't want CLI chatter on stdout.
-pub fn quiet() -> Console {
-    Console::new(true, false)
-}
 
 /// The superproject root (`git rev-parse --show-toplevel` from the cwd).
 pub fn repo_root() -> Result<PathBuf> {
@@ -96,4 +90,15 @@ pub fn set_sparse(
         false,
         con,
     )
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_assertions {
+    fn is_serde<T: serde::Serialize + serde::de::DeserializeOwned>() {}
+
+    #[test]
+    fn public_types_are_serde() {
+        is_serde::<crate::Submodule>();
+        is_serde::<crate::Level>();
+    }
 }

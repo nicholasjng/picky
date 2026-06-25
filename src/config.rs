@@ -11,6 +11,7 @@ use crate::git;
 const FILE: &str = ".gitmodules";
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Submodule {
     /// `submodule.<name>` section name (conventionally equal to `path`).
     pub name: String,

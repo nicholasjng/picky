@@ -17,3 +17,9 @@ clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 anstyle = "1"
 anstream = "1"
 anyhow = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+# Derive `Serialize`/`Deserialize` on the public data types (`Submodule`,
+# `Level`) — useful when embedding picky behind a serde boundary (e.g. Tauri).
+serde = ["dep:serde"]
