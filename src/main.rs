@@ -215,6 +215,13 @@ enum Commands {
         /// Target shell
         shell: Shell,
     },
+    /// Sanity-check submodule state against .gitmodules (dangling gitlinks,
+    /// orphaned git dirs, half-edited sections); diagnostic by default
+    Doctor {
+        /// Exit 1 if any issues are found (for a pre-commit hook or CI check)
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -383,6 +390,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
         }
         Commands::Status { paths } => commands::status::run(&root, &paths, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
+        Commands::Doctor { strict } => commands::doctor::run(&root, strict, con),
         Commands::Completions { .. } => unreachable!("handled above"),
     }
 }

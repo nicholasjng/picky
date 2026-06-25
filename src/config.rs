@@ -87,6 +87,38 @@ pub fn names(root: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// All `<section>.<name>` subsection names declared in `.gitmodules`,
+/// regardless of which specific keys they set (unlike [`names`], which only
+/// recognizes a submodule by its `.path` key). Used by `picky doctor` to spot
+/// a `picky.<name>` section with no matching `submodule.<name>`, or vice
+/// versa.
+pub fn section_names(root: &Path, section: &str) -> Result<Vec<String>> {
+    let out = git::capture_opt(
+        root,
+        &[
+            "config",
+            "-f",
+            FILE,
+            "--name-only",
+            "--get-regexp",
+            &format!(r"^{section}\..*\.[^.]+$"),
+        ],
+    )?;
+    let Some(out) = out else {
+        return Ok(Vec::new());
+    };
+    let prefix = format!("{section}.");
+    let mut names = std::collections::HashSet::new();
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix(&prefix)
+            && let Some((name, _key)) = rest.rsplit_once('.')
+        {
+            names.insert(name.to_string());
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
 /// Read a single submodule's full configuration: git's keys from
 /// `submodule.<name>.*`, picky's keys from `picky.<name>.*`.
 pub fn load(root: &Path, name: &str) -> Result<Submodule> {
