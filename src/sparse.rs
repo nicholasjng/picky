@@ -118,8 +118,14 @@ pub fn ensure_commit(root: &Path, sm: &Submodule, committish: &str, con: &Consol
     fetch(&wt, sm, committish, con)
 }
 
-/// `git fetch` honoring the submodule's filter and depth.
-fn fetch(wt: &Path, sm: &Submodule, refspec: &str, _con: &Console) -> Result<()> {
+/// `git fetch` honoring the submodule's filter and depth. If `PICKY_AUTO_GC`
+/// is set, follows up with a best-effort `git gc --auto` (threshold-gated, so
+/// a no-op on most runs) — a power-user knob for repos updated often enough
+/// that shallow-graft churn piles up between runs (e.g. an LLVM-sized
+/// submodule bumped in a loop). Off by default so a plain `fetch` stays
+/// side-effect-free; see `picky gc` (`src/commands/gc.rs`) for a deterministic
+/// `--prune=now` run instead.
+fn fetch(wt: &Path, sm: &Submodule, refspec: &str, con: &Console) -> Result<()> {
     let filter = sm.effective_filter().map(|f| format!("--filter={f}"));
     let depth = sm.effective_depth().map(|d| format!("--depth={d}"));
     let mut args = vec!["fetch", "-q"];
@@ -131,7 +137,13 @@ fn fetch(wt: &Path, sm: &Submodule, refspec: &str, _con: &Console) -> Result<()>
     }
     args.push("origin");
     args.push(refspec);
-    git::run(wt, &args)
+    git::run(wt, &args)?;
+    if std::env::var_os("PICKY_AUTO_GC").is_some() {
+        if let Err(e) = git::run(wt, &["gc", "--auto", "--quiet"]) {
+            con.warn(format!("auto-gc failed: {e:#}"));
+        }
+    }
+    Ok(())
 }
 
 /// Fetch a ref into the submodule and report the resolved commit (used by

@@ -233,6 +233,14 @@ enum Commands {
         #[arg(long)]
         strict: bool,
     },
+    /// Deterministically prune each submodule's object store (`git gc
+    /// --prune=now`); no args ⇒ all submodules. See PICKY_AUTO_GC for an
+    /// opt-in `gc --auto` after every fetch instead
+    Gc {
+        /// Submodule paths to gc (no args ⇒ all)
+        #[arg(add = ArgValueCandidates::new(submodule_candidates))]
+        paths: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -406,6 +414,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
         Commands::Status { paths, json } => commands::status::run(&root, &paths, json, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
         Commands::Doctor { strict } => commands::doctor::run(&root, strict, con),
+        Commands::Gc { paths } => commands::gc::run(&root, &paths, con),
         Commands::Completions { .. } => unreachable!("handled above"),
     }
 }
