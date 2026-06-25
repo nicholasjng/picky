@@ -992,7 +992,7 @@ fn sparse_set_replaces_list_from_file_and_stdin() {
 
 #[test]
 fn post_update_hook_runs_after_checkout() {
-    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let (_tmp, sup, v1) = fixture(&["/src/"], None);
     // A hook that records the env vars picky exposes to it.
     let cmd =
         "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran";
@@ -1007,8 +1007,9 @@ fn post_update_hook_runs_after_checkout() {
         ],
     );
     // Pre-approve it in *local* (untracked) config: simulates a user who has
-    // already reviewed and trusted this exact hook text.
+    // already reviewed and trusted this exact hook text at this exact SHA.
     git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", cmd]);
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdateSha", &v1]);
 
     let out = picky(&sup, &["init", "ext/dep"]);
     assert!(
@@ -1027,7 +1028,7 @@ fn post_update_hook_runs_after_checkout() {
 
 #[test]
 fn post_update_hook_failure_is_fatal() {
-    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let (_tmp, sup, v1) = fixture(&["/src/"], None);
     git(
         &sup,
         &[
@@ -1042,6 +1043,7 @@ fn post_update_hook_failure_is_fatal() {
         &sup,
         &["config", "picky.ext/dep.trustedPostUpdate", "exit 3"],
     );
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdateSha", &v1]);
 
     let out = picky(&sup, &["init", "ext/dep"]);
     assert!(
@@ -1117,6 +1119,60 @@ fn post_update_hook_trust_env_var_allows_and_persists() {
         sup.join("ext/dep/.trusted-via-env").exists(),
         "trust should persist across runs"
     );
+}
+
+#[test]
+fn post_update_hook_sha_bump_invalidates_trust() {
+    // A hook that runs a script living *inside* the submodule: the
+    // `postUpdate` string never changes, but the script's contents can, on a
+    // SHA bump. Trust pinned to command text alone would miss that; pinning
+    // (text, SHA) must not.
+    let (_tmp, sup, v1) = fixture(&["/src/"], None);
+    let cmd = "touch .hook-ran";
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            cmd,
+        ],
+    );
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", cmd]);
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdateSha", &v1]);
+
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert!(sup.join("ext/dep/.hook-ran").is_file());
+    std::fs::remove_file(sup.join("ext/dep/.hook-ran")).unwrap();
+
+    // Bump to v2: same `postUpdate` text, different SHA. The old approval
+    // must not carry over.
+    let out = picky(&sup, &["update", "ext/dep", "v2"]);
+    assert!(
+        !out.status.success(),
+        "a SHA bump must re-arm the trust prompt even with identical hook text"
+    );
+    assert!(
+        !sup.join("ext/dep/.hook-ran").exists(),
+        "hook must not run under the stale SHA's approval"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("trust") || stderr.contains("approve"),
+        "expected trust guidance in stderr, got: {stderr}"
+    );
+
+    // Re-approving at the new SHA lets it run again.
+    let dep_head = git(&sup.join("ext/dep"), &["rev-parse", "HEAD"]);
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdateSha", &dep_head]);
+    let out = picky(&sup, &["update", "ext/dep", "v2"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(sup.join("ext/dep/.hook-ran").is_file());
 }
 
 #[test]

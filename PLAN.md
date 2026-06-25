@@ -134,9 +134,11 @@ derive-only, for embedders; `status --json` is hand-rolled).
 - `hook.rs`: `postUpdate` is sourced from committed `.gitmodules`, so it is
   never run unconditionally (mirrors git's own fix for CVE-2015-7545, where a
   `.gitmodules`-sourced `submodule.<name>.update = !cmd` ran arbitrary
-  commands). Approval is recorded verbatim in local, untracked config
-  (`picky.<name>.trustedPostUpdate`); non-interactive runs need a prior
-  approval or `PICKY_TRUST_HOOKS=1`.
+  commands). Approval is recorded verbatim in local, untracked config,
+  pinned to both command text (`picky.<name>.trustedPostUpdate`) and
+  submodule SHA (`picky.<name>.trustedPostUpdateSha`), so a commit bump
+  re-arms the prompt even with unchanged command text. Non-interactive
+  runs need a prior approval at the current SHA or `PICKY_TRUST_HOOKS=1`.
 
 ## Out of scope (v1)
 

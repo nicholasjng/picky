@@ -7,9 +7,12 @@
 //! run unconditionally: this mirrors git's own fix for CVE-2015-7545, which
 //! let a malicious `.gitmodules` run arbitrary commands via
 //! `submodule.<name>.update = !cmd`. Approval is recorded verbatim in
-//! *local*, untracked config (`picky.<name>.trustedPostUpdate`, written to
-//! `.git/config`, never `.gitmodules`) and re-asked whenever the command text
-//! changes.
+//! *local*, untracked config (`picky.<name>.trustedPostUpdate` /
+//! `picky.<name>.trustedPostUpdateSha`, written to `.git/config`, never
+//! `.gitmodules`) and re-asked whenever the command text or the submodule's
+//! checked-out SHA changes. The SHA is pinned too: a hook that runs a script
+//! inside the submodule can keep an identical `postUpdate` string across a
+//! SHA bump while the script's contents change underneath it.
 
 use anyhow::{Context, Result, bail};
 use std::io::IsTerminal;
@@ -28,10 +31,11 @@ pub fn run_post_update(root: &Path, sm: &Submodule, con: &Console) -> Result<()>
     let Some(cmd) = &sm.post_update else {
         return Ok(());
     };
-    ensure_trusted(root, sm, cmd, con)?;
 
     let wt = root.join(&sm.path);
     let sha = git::capture(&wt, &["rev-parse", "HEAD"]).unwrap_or_default();
+
+    ensure_trusted(root, sm, cmd, &sha, con)?;
 
     con.step("Running post-update hook");
     con.detail(cmd);
@@ -51,26 +55,40 @@ pub fn run_post_update(root: &Path, sm: &Submodule, con: &Console) -> Result<()>
     Ok(())
 }
 
-/// The local-config key a trust decision for `sm`'s hook is recorded under.
+/// The local-config keys a trust decision for `sm`'s hook is recorded under.
 /// Deliberately not in `.gitmodules`: that file is exactly what a hostile
 /// clone controls, so trust can't live there.
 fn trust_key(sm: &Submodule) -> String {
     format!("picky.{}.trustedPostUpdate", sm.name)
 }
 
-/// Refuse to run `cmd` unless it's approved for `sm`: already trusted (local
-/// config holds this exact command text; any edit invalidates it), approved
-/// interactively just now and then recorded, or blanket-approved via
-/// `PICKY_TRUST_HOOKS=1` (for CI/scripted use, where the caller already
-/// trusts the checked-out content).
-fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Result<()> {
+/// The SHA half of the trust pin: a hook command that runs a script *inside*
+/// the submodule (e.g. `sh scripts/hook.sh`) would keep an identical
+/// `postUpdate` string across a SHA bump while the script's actual contents
+/// changed underneath it, so the command text alone isn't a strong enough
+/// pin.
+fn trust_sha_key(sm: &Submodule) -> String {
+    format!("picky.{}.trustedPostUpdateSha", sm.name)
+}
+
+/// Refuse to run `cmd` at `sha` unless it's approved for `sm`: already
+/// trusted (local config holds this exact command text *and* SHA; either
+/// changing invalidates it), approved interactively just now and then
+/// recorded, or blanket-approved via `PICKY_TRUST_HOOKS=1` (for
+/// CI/scripted use, where the caller already trusts the checked-out
+/// content).
+fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, sha: &str, con: &Console) -> Result<()> {
     let key = trust_key(sm);
-    if git::capture_opt(root, &["config", "--get", &key])?.as_deref() == Some(cmd) {
+    let sha_key = trust_sha_key(sm);
+    let trusted_cmd = git::capture_opt(root, &["config", "--get", &key])?;
+    let trusted_sha = git::capture_opt(root, &["config", "--get", &sha_key])?;
+    if trusted_cmd.as_deref() == Some(cmd) && trusted_sha.as_deref() == Some(sha) {
         return Ok(());
     }
 
     if std::env::var_os("PICKY_TRUST_HOOKS").is_some() {
         git::run(root, &["config", &key, cmd])?;
+        git::run(root, &["config", &sha_key, sha])?;
         return Ok(());
     }
 
@@ -85,7 +103,7 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Resu
         bail!(
             "refusing to run an unapproved post-update hook non-interactively.\n  \
              Approve it once interactively, set PICKY_TRUST_HOOKS=1, or trust it \
-             directly:\n  git config {key} '{cmd}'"
+             directly:\n  git config {key} '{cmd}'\n  git config {sha_key} '{sha}'"
         );
     }
 
@@ -98,5 +116,6 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Resu
         );
     }
     git::run(root, &["config", &key, cmd])?;
+    git::run(root, &["config", &sha_key, sha])?;
     Ok(())
 }

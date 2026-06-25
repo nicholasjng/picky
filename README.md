@@ -230,8 +230,12 @@ repo, so in a clone of someone else's repo it's attacker-controlled text. It's
 never run unconditionally: the first time picky sees a given hook command for
 a submodule, it prints the command and asks for interactive approval before
 running it. Approval is recorded **locally** (`picky.<name>.trustedPostUpdate`
-in `.git/config`, never `.gitmodules`) and remembered verbatim; editing the
-hook command invalidates the old approval and triggers a re-prompt.
+and `picky.<name>.trustedPostUpdateSha` in `.git/config`, never `.gitmodules`),
+pinned to both the command text and the submodule's checked-out SHA. Either
+changing invalidates the approval and triggers a re-prompt. The SHA is pinned
+too because a hook that runs a script inside the submodule (e.g.
+`sh scripts/hook.sh`) can keep an identical `postUpdate` string across a
+commit bump while the script's contents change underneath it.
 
 Running non-interactively (CI, scripts) with an unapproved hook fails with
 guidance rather than silently skipping or silently running it. Either approve
@@ -239,11 +243,16 @@ it once interactively beforehand, trust it directly:
 
 ```sh
 git config picky.ext/duckdb.trustedPostUpdate 'cmake -P cmake/OverrideGitDescribe.cmake'
+git config picky.ext/duckdb.trustedPostUpdateSha '<submodule sha>'
 ```
 
 or set `PICKY_TRUST_HOOKS=1` in the environment to auto-approve (and persist)
 any hook it encounters, useful for CI that already trusts the checked-out
 content.
+
+Not covered: commands that fetch or compute at run time (`curl ... | sh`,
+`$(...)`), and scripts outside `.gitmodules`'s reach (e.g. in the
+superproject itself, no different from any other tracked file).
 
 ## Commands
 
