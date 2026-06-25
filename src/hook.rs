@@ -1,28 +1,27 @@
 //! The optional post-update hook: a shell command a submodule may declare via
-//! `picky.<name>.postUpdate`, run after its working tree is (re)materialized —
-//! the seam for project-specific glue like ducky's `OVERRIDE_GIT_DESCRIBE` rewrite.
+//! `picky.<name>.postUpdate`, run after its working tree is (re)materialized.
+//! The seam for project-specific glue like ducky's `OVERRIDE_GIT_DESCRIBE` rewrite.
 //!
 //! The command text comes from `.gitmodules`, which is committed and travels
-//! with the repo — in a hostile clone it is attacker-controlled. So it is
-//! never run unconditionally: this mirrors git's own protection against
-//! executable directives read from a versioned file (the fix for
-//! CVE-2015-7545, which let a malicious `.gitmodules` run arbitrary commands
-//! via `submodule.<name>.update = !cmd`). Approval is recorded verbatim in
+//! with the repo, so in a hostile clone it's attacker-controlled. It's never
+//! run unconditionally: this mirrors git's own fix for CVE-2015-7545, which
+//! let a malicious `.gitmodules` run arbitrary commands via
+//! `submodule.<name>.update = !cmd`. Approval is recorded verbatim in
 //! *local*, untracked config (`picky.<name>.trustedPostUpdate`, written to
-//! `.git/config`, never `.gitmodules`) and is re-asked whenever the command
-//! text changes.
+//! `.git/config`, never `.gitmodules`) and re-asked whenever the command text
+//! changes.
 
 use anyhow::{Context, Result, bail};
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
 use crate::config::Submodule;
-use crate::console::Console;
+use crate::console::{self, Console};
 use crate::git;
 
 /// Run the submodule's `postUpdate` hook, if configured; a no-op when unset.
-/// Refuses to run until [`ensure_trusted`] approves it. The command runs
+/// Refuses to run until `ensure_trusted` approves it. The command runs
 /// through `sh -c` in the submodule's working tree, with `PICKY_*` env vars
 /// describing the checkout. A non-zero exit is fatal.
 pub fn run_post_update(root: &Path, sm: &Submodule, con: &Console) -> Result<()> {
@@ -53,16 +52,16 @@ pub fn run_post_update(root: &Path, sm: &Submodule, con: &Console) -> Result<()>
 }
 
 /// The local-config key a trust decision for `sm`'s hook is recorded under.
-/// Deliberately not in `.gitmodules` — that file is exactly what a hostile
-/// clone controls, so trust can't be allowed to live there.
+/// Deliberately not in `.gitmodules`: that file is exactly what a hostile
+/// clone controls, so trust can't live there.
 fn trust_key(sm: &Submodule) -> String {
     format!("picky.{}.trustedPostUpdate", sm.name)
 }
 
-/// Refuse to run `cmd` unless it is approved for `sm`: already trusted (local
-/// config holds this exact command text — any edit invalidates it), approved
-/// interactively just now (and then recorded), or blanket-approved via
-/// `PICKY_TRUST_HOOKS=1` (for CI / scripted use, where the caller already
+/// Refuse to run `cmd` unless it's approved for `sm`: already trusted (local
+/// config holds this exact command text; any edit invalidates it), approved
+/// interactively just now and then recorded, or blanket-approved via
+/// `PICKY_TRUST_HOOKS=1` (for CI/scripted use, where the caller already
 /// trusts the checked-out content).
 fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Result<()> {
     let key = trust_key(sm);
@@ -76,7 +75,7 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Resu
     }
 
     con.warn(format!(
-        "{} declares a post-update hook sourced from .gitmodules — a file \
+        "{} declares a post-update hook sourced from .gitmodules, a file \
          that ships with the repo and could carry a malicious command:",
         sm.path
     ));
@@ -90,15 +89,9 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, con: &Console) -> Resu
         );
     }
 
-    eprint!("  run it? [y/N] ");
-    std::io::stderr().flush().ok();
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .context("reading hook approval from stdin")?;
-    if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
+    if !console::confirm("  run it? [y/N] ")? {
         bail!(
-            "post-update hook for {} was not approved — re-run and accept, \
+            "post-update hook for {} was not approved; re-run and accept, \
              or remove `picky.{}.postUpdate` from .gitmodules",
             sm.path,
             sm.name

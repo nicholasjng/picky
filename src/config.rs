@@ -161,7 +161,7 @@ pub fn only(root: &Path) -> Result<Submodule> {
     match all.len() {
         1 => Ok(all.remove(0)),
         0 => bail!("no submodules declared in .gitmodules"),
-        _ => bail!("multiple submodules declared — specify a path"),
+        _ => bail!("multiple submodules declared, specify a path"),
     }
 }
 
@@ -202,8 +202,8 @@ pub fn write(root: &Path, sm: &Submodule) -> Result<()> {
     Ok(())
 }
 
-/// Set `key` to `value`, or unset it (best-effort — a key that was never set
-/// is not an error) when `value` is `None`. The primitive that makes
+/// Set `key` to `value`, or unset it when `value` is `None` (best-effort: a
+/// key that was never set is not an error). The primitive that makes
 /// [`write`] declarative rather than additive.
 fn set_or_unset(root: &Path, key: &str, value: Option<&str>) -> Result<()> {
     match value {

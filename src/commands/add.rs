@@ -1,4 +1,4 @@
-//! `picky add <url> <path> …` — build the sparse checkout, then write and
+//! `picky add <url> <path> …`: build the sparse checkout, then write and
 //! stage the `.gitmodules` entry and the new gitlink.
 
 use anyhow::Result;
@@ -39,7 +39,7 @@ pub fn run(
 
     con.heading(format!("adding submodule {}", sm.path));
 
-    // Build the checkout first, entirely from the in-memory `sm` — nothing
+    // Build the checkout first, entirely from the in-memory `sm`: nothing
     // touches `.gitmodules` on disk until it succeeds, so a failed add (bad
     // URL, bad --ref, network) leaves no half-declared submodule behind.
     sparse::prepare(root, &sm, con)?;
@@ -52,7 +52,7 @@ pub fn run(
     hook::run_post_update(root, &sm, con)?;
 
     // Only now record + stage the declaration. Suppress git's "embedded git
-    // repository" hint — a gitlink is exactly what we want.
+    // repository" hint: a gitlink is exactly what we want.
     config::write(root, &sm)?;
     git::run(root, &["add", ".gitmodules"])?;
     git::run(
@@ -66,6 +66,6 @@ pub fn run(
         Some(size) => con.success(format!("{} added at {short} ({size})", sm.path)),
         None => con.success(format!("{} added at {short}", sm.path)),
     }
-    con.plain("  staged .gitmodules + gitlink — commit them to record the submodule");
+    con.plain("  staged .gitmodules + gitlink, commit them to record the submodule");
     Ok(())
 }

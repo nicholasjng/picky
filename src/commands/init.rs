@@ -1,4 +1,4 @@
-//! `picky init [<path>…]` — reconstruct sparse checkouts from committed config.
+//! `picky init [<path>…]`: reconstruct sparse checkouts from committed config.
 //! The `init-duckdb.sh` equivalent. With no paths, every declared submodule.
 
 use anyhow::Result;

@@ -54,7 +54,7 @@ pub fn apply_stack(root: &Path, sm: &Submodule, con: &Console) -> Result<usize> 
     if !failed.is_empty() {
         bail!(
             "patch(es) need rebasing: {}\n  \
-             Conflict markers are left in {} — resolve them, regenerate the patch \
+             Conflict markers are left in {}: resolve them, regenerate the patch \
              (git -C {} diff HEAD > {}/...), or retire it.",
             failed.join(", "),
             sm.path,

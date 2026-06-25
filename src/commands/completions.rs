@@ -1,4 +1,4 @@
-//! `picky completions <shell>` — print the eval-able registration script for
+//! `picky completions <shell>`: print the eval-able registration script for
 //! clap_complete's completion *engine* (à la `zoxide init`). The script makes
 //! the shell call back into the binary at completion time, so candidates reflect
 //! the live repo. Wire up with `eval "$(picky completions zsh)"`.

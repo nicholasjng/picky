@@ -1,4 +1,4 @@
-//! `picky refresh [<path>…]` — refresh the cached ref list (used by `<ref>`
+//! `picky refresh [<path>…]`: refresh the cached ref list (used by `<ref>`
 //! completion) from each submodule's remote. Also invoked detached as a
 //! background warm-up when completion serves a stale cache.
 
