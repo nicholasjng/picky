@@ -1,4 +1,4 @@
-//! `picky sparse <list|add|remove|set|clear>` — inspect and edit a submodule's
+//! `picky sparse <list|add|remove|set|clear>`: inspect and edit a submodule's
 //! sparse-checkout patterns, reconciling the checkout afterwards.
 
 use anyhow::{Context, Result, bail};
@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::commands;
-use crate::config;
+use crate::config::{self, Submodule};
 use crate::console::Console;
 use crate::git;
 
@@ -44,7 +44,7 @@ pub fn collect_patterns(
         out.extend(parse_lines(&text));
     }
     if out.is_empty() {
-        bail!("no patterns provided — pass them as arguments, --stdin, or --from <file>");
+        bail!("no patterns provided, pass them as arguments, --stdin, or --from <file>");
     }
     Ok(out)
 }
@@ -66,6 +66,21 @@ pub fn run(
     no_reinit: bool,
     con: &Console,
 ) -> Result<()> {
+    // `list` is read-only, so (like `status`/`init`/`refresh`) no path means
+    // every submodule instead of erroring on ambiguity. The mutating actions
+    // keep requiring exactly one target.
+    if path.is_none() && matches!(action, Action::List) {
+        let subs = config::load_all(root)?;
+        if subs.is_empty() {
+            con.warn("no submodules declared in .gitmodules");
+            return Ok(());
+        }
+        for sm in &subs {
+            print_patterns(sm, con);
+        }
+        return Ok(());
+    }
+
     let sm = match path {
         Some(p) => config::find(root, &p)?,
         None => config::only(root)?,
@@ -74,14 +89,7 @@ pub fn run(
     // Resolve the action into the next pattern list (or print + return for List).
     let mut patterns = match &action {
         Action::List => {
-            if sm.sparse.is_empty() {
-                con.plain(format!("{}: no sparse patterns (full checkout)", sm.path));
-            } else {
-                con.heading(format!("{} sparse patterns:", sm.path));
-                for p in &sm.sparse {
-                    con.plain(format!("  {p}"));
-                }
-            }
+            print_patterns(&sm, con);
             return Ok(());
         }
         Action::Clear => Vec::new(),
@@ -139,4 +147,15 @@ pub fn run(
         commands::init::run(root, std::slice::from_ref(&sm.path), con)?;
     }
     Ok(())
+}
+
+fn print_patterns(sm: &Submodule, con: &Console) {
+    if sm.sparse.is_empty() {
+        con.plain(format!("{}: no sparse patterns (full checkout)", sm.path));
+    } else {
+        con.heading(format!("{} sparse patterns:", sm.path));
+        for p in &sm.sparse {
+            con.plain(format!("  {p}"));
+        }
+    }
 }

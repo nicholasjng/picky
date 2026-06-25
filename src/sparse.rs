@@ -1,5 +1,5 @@
 //! Submodule git-dir construction plus partial-clone, promisor and
-//! sparse-checkout configuration — the reusable core of `init-duckdb.sh`, kept
+//! sparse-checkout configuration, the reusable core of `init-duckdb.sh`. Kept
 //! idempotent so any prior state converges to the same checkout.
 
 use anyhow::{Context, Result, anyhow};
@@ -13,7 +13,7 @@ use crate::git;
 /// The gitlink revision the superproject pins `path` to.
 pub fn pinned_sha(root: &Path, path: &str) -> Result<String> {
     let out = git::capture(root, &["ls-files", "-s", path])?;
-    // `<mode> <sha> <stage>\t<path>` — `split_whitespace` also splits the tab.
+    // `<mode> <sha> <stage>\t<path>`; `split_whitespace` also splits the tab.
     out.split_whitespace()
         .nth(1)
         .map(str::to_string)
