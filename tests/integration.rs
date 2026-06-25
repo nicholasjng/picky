@@ -133,7 +133,7 @@ fn remote_fixture() -> (TmpDir, String, String) {
 
     let up = root.join("up");
     std::fs::create_dir_all(&up).unwrap();
-    // Pin the default branch name explicitly — tests reference it by name
+    // Pin the default branch name explicitly: tests reference it by name
     // and shouldn't depend on the runner's `init.defaultBranch`.
     git(&up, &["init", "-q", "-b", "main"]);
     write(&up.join("keep/a.txt"), "keep\n");
@@ -235,7 +235,7 @@ fn fixture(sparse: &[&str], patches: Option<&str>) -> (TmpDir, PathBuf, String) 
     (tmp, sup, v1)
 }
 
-/// A fresh, empty superproject under `remote_fixture`'s tmp root — nothing
+/// A fresh, empty superproject under `remote_fixture`'s tmp root; nothing
 /// declared yet, for tests that exercise `add`/`remove` themselves.
 fn empty_super(tmp: &TmpDir) -> PathBuf {
     let sup = tmp.path().join("super");
@@ -343,7 +343,13 @@ fn add_declares_and_checks_out_a_new_submodule() {
     assert!(staged.lines().any(|l| l == "ext/dep"), "staged: {staged}");
     let cfg_url = git(
         &sup,
-        &["config", "-f", ".gitmodules", "--get", "submodule.ext/dep.url"],
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--get",
+            "submodule.ext/dep.url",
+        ],
     );
     assert_eq!(cfg_url, url);
 }
@@ -415,7 +421,7 @@ fn remove_deletes_checkout_and_undeclares_submodule() {
     let gitdir = sup.join(".git/modules/ext/dep");
     assert!(gitdir.is_dir());
 
-    let out = picky(&sup, &["remove", "ext/dep"]);
+    let out = picky(&sup, &["remove", "ext/dep", "--yes"]);
     assert!(
         out.status.success(),
         "{}",
@@ -434,7 +440,7 @@ fn remove_deletes_checkout_and_undeclares_submodule() {
         ".gitmodules should have no trace of ext/dep left, got: {cfg}"
     );
 
-    // Staged, ready to commit — nothing left dangling.
+    // Staged, ready to commit; nothing left dangling.
     let staged = git(&sup, &["diff", "--cached", "--name-only"]);
     assert!(staged.lines().any(|l| l == ".gitmodules"));
     assert!(staged.lines().any(|l| l == "ext/dep"));
@@ -445,10 +451,42 @@ fn remove_requires_explicit_paths() {
     let (_tmp, sup, _v1) = fixture(&["/src/"], None);
     let out = picky(&sup, &["remove"]);
     assert!(!out.status.success(), "remove with no paths should fail");
-    // Nothing was touched — the declaration is still there.
+    // Nothing was touched; the declaration is still there.
     let path_cfg = git(
         &sup,
-        &["config", "-f", ".gitmodules", "--get", "submodule.ext/dep.path"],
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--get",
+            "submodule.ext/dep.path",
+        ],
+    );
+    assert_eq!(path_cfg, "ext/dep", "declaration should be untouched");
+}
+
+#[test]
+fn remove_without_yes_is_refused_noninteractively() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    let dep = sup.join("ext/dep");
+
+    // No --yes, and the test harness's stdin is not a terminal to prompt on.
+    let out = picky(&sup, &["remove", "ext/dep"]);
+    assert!(
+        !out.status.success(),
+        "remove without --yes should refuse non-interactively"
+    );
+    assert!(dep.exists(), "nothing should have been removed");
+    let path_cfg = git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--get",
+            "submodule.ext/dep.path",
+        ],
     );
     assert_eq!(path_cfg, "ext/dep", "declaration should be untouched");
 }
@@ -507,26 +545,213 @@ fn update_unshallow_flag_fetches_history() {
 
 #[test]
 fn update_bad_ref_fetch_suggests_unshallow() {
-    // A real git server commonly rejects a default (shallow, single-ref)
-    // bump when the target is a commit SHA it won't fetch directly rather
-    // than an advertised branch/tag (`uploadpack.allow*SHA1InWant`) — but
-    // `file://` remotes use git's local-clone optimization and never
-    // enforce that restriction, so it can't be reproduced through this
-    // fixture. What's testable end-to-end is the error translation itself:
-    // any failure of the default bump's targeted fetch must carry the
-    // `--unshallow` hint, which this (deterministically nonexistent) SHA
-    // exercises via the same code path.
+    // A real server-side SHA-in-want rejection can't be reproduced through
+    // `file://` remotes (git's local-clone optimization skips that check
+    // entirely). What's testable is the error translation: any failure of
+    // the default bump's targeted fetch must carry the `--unshallow` hint,
+    // which this nonexistent SHA exercises via the same code path.
     let (_tmp, sup, _v1) = fixture(&["/src/"], None);
     assert!(picky(&sup, &["init", "ext/dep"]).status.success());
 
     let bogus = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     let out = picky(&sup, &["update", "ext/dep", bogus]);
-    assert!(!out.status.success(), "fetching a nonexistent SHA should fail");
+    assert!(
+        !out.status.success(),
+        "fetching a nonexistent SHA should fail"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("--unshallow"),
         "expected a hint to retry with --unshallow, got: {stderr}"
     );
+}
+
+#[test]
+fn update_all_refreshes_every_submodule_without_bumping() {
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    for name in ["ext/a", "ext/b"] {
+        git(
+            &sup,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{v1},{name}"),
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.path"),
+                name,
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.url"),
+                &url,
+            ],
+        );
+    }
+    git(&sup, &["add", ".gitmodules"]);
+    git(&sup, &["commit", "-qm", "subs"]);
+
+    assert!(picky(&sup, &["init"]).status.success());
+    let a = sup.join("ext/a");
+    let b = sup.join("ext/b");
+    assert_eq!(git(&a, &["rev-parse", "HEAD"]), v1);
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]), v1);
+
+    let out = picky(&sup, &["update", "--all"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Still at v1 (a refresh, not a bump) but both freshly re-checked-out.
+    assert_eq!(git(&a, &["rev-parse", "HEAD"]), v1);
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]), v1);
+
+    // --all can't be combined with a target/ref.
+    let out = picky(&sup, &["update", "--all", "ext/a"]);
+    assert!(
+        !out.status.success(),
+        "--all with a target should be rejected"
+    );
+}
+
+#[test]
+fn status_upstream_column_reflects_refresh_cache() {
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    // Declare with a tracked branch (not just a bare pin): staleness is only
+    // well-defined against a branch, not an immutable SHA/tag pin. Pin at v1
+    // while the remote's "main" tip (its last commit) is v2.
+    git(
+        &sup,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{v1},ext/dep"),
+        ],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/dep.path",
+            "ext/dep",
+        ],
+    );
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.ext/dep.url", &url],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/dep.branch",
+            "main",
+        ],
+    );
+    git(&sup, &["add", ".gitmodules"]);
+    git(&sup, &["commit", "-qm", "sub"]);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // No cache yet: unknown.
+    let out = picky(&sup, &["status"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let dep_line = |s: &str| {
+        s.lines()
+            .find(|l| l.contains("ext/dep"))
+            .map(str::to_string)
+    };
+    assert!(
+        dep_line(&stdout).is_some_and(|l| l.contains('?')),
+        "expected an unknown upstream marker, got: {stdout}"
+    );
+
+    // Populate the cache: pinned at v1 while main's tip is v2 ⇒ stale.
+    assert!(picky(&sup, &["refresh", "ext/dep"]).status.success());
+    let out = picky(&sup, &["status"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        dep_line(&stdout).is_some_and(|l| l.contains("stale")),
+        "expected a stale upstream marker, got: {stdout}"
+    );
+
+    // Bump onto the branch tip: now current.
+    assert!(picky(&sup, &["update", "ext/dep", "main"]).status.success());
+    assert!(picky(&sup, &["refresh", "ext/dep"]).status.success());
+    let out = picky(&sup, &["status"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        dep_line(&stdout).is_some_and(|l| l.contains("current")),
+        "expected a current upstream marker, got: {stdout}"
+    );
+}
+
+#[test]
+fn status_json_emits_a_parseable_array() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let out = picky(&sup, &["status", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let trimmed = stdout.trim();
+    assert!(
+        trimmed.starts_with('[') && trimmed.ends_with(']'),
+        "{stdout}"
+    );
+    assert!(trimmed.contains(r#""submodule": "ext/dep""#), "{stdout}");
+    assert!(trimmed.contains(r#""sparse": "on(1)""#), "{stdout}");
+    // No table headers or the human-only footer hint leaking into JSON mode.
+    assert!(!stdout.contains("SUBMODULE"), "{stdout}");
+    assert!(!stdout.contains("no cached ref data"), "{stdout}");
+
+    // No submodules ⇒ a valid empty array, not the plain-text warning.
+    let (tmp2, ..) = remote_fixture();
+    let empty_sup = empty_super(&tmp2);
+    let out = picky(&empty_sup, &["status", "--json"]);
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
 }
 
 #[test]
@@ -600,6 +825,82 @@ fn sparse_subcommand_widens_and_narrows() {
     );
     assert!(!dep.join("src").exists(), "removed path should be trimmed");
     assert!(dep.join("keep").is_dir());
+}
+
+#[test]
+fn sparse_list_with_no_path_lists_every_submodule() {
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    for (name, pat) in [("ext/a", "/src/"), ("ext/b", "/keep/")] {
+        git(
+            &sup,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{v1},{name}"),
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.path"),
+                name,
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.url"),
+                &url,
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                "--add",
+                &format!("picky.{name}.sparse"),
+                pat,
+            ],
+        );
+    }
+    git(&sup, &["add", ".gitmodules"]);
+    git(&sup, &["commit", "-qm", "subs"]);
+
+    // With no -p, list must cover both, not error out like the mutating
+    // actions do when there's more than one submodule and no path given.
+    let out = picky(&sup, &["sparse", "list"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ext/a") && stdout.contains("/src/"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ext/b") && stdout.contains("/keep/"),
+        "{stdout}"
+    );
+
+    // Mutating actions still require an explicit path when ambiguous.
+    let out = picky(&sup, &["sparse", "add", "/extra/"]);
+    assert!(
+        !out.status.success(),
+        "sparse add with no path should still require -p when there's more than one submodule"
+    );
 }
 
 #[test]
@@ -693,12 +994,19 @@ fn sparse_set_replaces_list_from_file_and_stdin() {
 fn post_update_hook_runs_after_checkout() {
     let (_tmp, sup, _v1) = fixture(&["/src/"], None);
     // A hook that records the env vars picky exposes to it.
-    let cmd = "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran";
+    let cmd =
+        "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran";
     git(
         &sup,
-        &["config", "-f", ".gitmodules", "picky.ext/dep.postUpdate", cmd],
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            cmd,
+        ],
     );
-    // Pre-approve it in *local* (untracked) config — simulates a user who has
+    // Pre-approve it in *local* (untracked) config: simulates a user who has
     // already reviewed and trusted this exact hook text.
     git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", cmd]);
 
@@ -730,7 +1038,10 @@ fn post_update_hook_failure_is_fatal() {
             "exit 3",
         ],
     );
-    git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", "exit 3"]);
+    git(
+        &sup,
+        &["config", "picky.ext/dep.trustedPostUpdate", "exit 3"],
+    );
 
     let out = picky(&sup, &["init", "ext/dep"]);
     assert!(
@@ -742,7 +1053,7 @@ fn post_update_hook_failure_is_fatal() {
 #[test]
 fn post_update_hook_untrusted_is_refused_noninteractively() {
     let (_tmp, sup, _v1) = fixture(&["/src/"], None);
-    // Declared in .gitmodules but never approved anywhere — a hostile clone's
+    // Declared in .gitmodules but never approved anywhere: a hostile clone's
     // hook must not run just because the checkout succeeded.
     git(
         &sup,
@@ -805,5 +1116,91 @@ fn post_update_hook_trust_env_var_allows_and_persists() {
     assert!(
         sup.join("ext/dep/.trusted-via-env").exists(),
         "trust should persist across runs"
+    );
+}
+
+#[test]
+fn doctor_reports_no_issues_on_a_clean_repo() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let out = picky(&sup, &["doctor"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn doctor_flags_orphaned_gitdir_and_dangling_gitlink() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // Simulate hand-editing .gitmodules to drop the declaration instead of
+    // running `picky remove`: the git dir under .git/modules is left behind.
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--remove-section",
+            "submodule.ext/dep",
+        ],
+    );
+    let out = picky(&sup, &["doctor"]);
+    assert!(
+        out.status.success(),
+        "doctor is diagnostic-only, never fails"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("orphaned git dir") && stderr.contains(".git/modules/ext/dep"),
+        "expected an orphaned-gitdir warning, got: {stderr}"
+    );
+
+    // Simulate a dangling gitlink on a *different*, still-declared submodule:
+    // the worktree `.git` file survives but its target git dir is gone.
+    let (_tmp2, sup2, _v1_2) = fixture(&["/src/"], None);
+    assert!(picky(&sup2, &["init", "ext/dep"]).status.success());
+    std::fs::remove_dir_all(sup2.join(".git/modules/ext/dep")).unwrap();
+    let out2 = picky(&sup2, &["doctor"]);
+    assert!(out2.status.success());
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        stderr2.contains("dangling gitlink"),
+        "expected a dangling-gitlink warning, got: {stderr2}"
+    );
+}
+
+#[test]
+fn doctor_strict_exits_nonzero_on_issues() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // Clean repo: --strict still exits 0.
+    assert!(picky(&sup, &["doctor", "--strict"]).status.success());
+
+    // Same orphan scenario as above, but with --strict this time.
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--remove-section",
+            "submodule.ext/dep",
+        ],
+    );
+    let out = picky(&sup, &["doctor", "--strict"]);
+    assert!(
+        !out.status.success(),
+        "--strict should exit nonzero when issues are found"
+    );
+    let out_plain = picky(&sup, &["doctor"]);
+    assert!(
+        out_plain.status.success(),
+        "without --strict the same issues should still just warn"
     );
 }
