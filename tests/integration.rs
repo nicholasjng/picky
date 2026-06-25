@@ -827,6 +827,67 @@ fn sparse_subcommand_widens_and_narrows() {
     assert!(dep.join("keep").is_dir());
 }
 
+/// `sparse clear` must restore the *whole* checkout, not just flip the config
+/// key: dropping every pattern needs `git sparse-checkout disable` to clear the
+/// index's `skip-worktree` bits. Setting `core.sparseCheckout=false` alone left
+/// the excluded files missing while reporting a full checkout.
+#[test]
+fn sparse_clear_restores_the_full_checkout() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert!(!dep.join("drop").exists(), "starts sparse");
+
+    let out = picky(&sup, &["sparse", "clear", "-p", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for path in ["src", "keep", "drop"] {
+        assert!(
+            dep.join(path).is_dir(),
+            "{path} should materialize after clear"
+        );
+    }
+    assert!(dep.join("README").is_file());
+    // No `skip-worktree` bit may survive: `ls-files -v` marks them with `S`.
+    let listed = git(&dep, &["ls-files", "-v"]);
+    assert!(
+        !listed.lines().any(|l| l.starts_with('S')),
+        "skip-worktree bits left behind:\n{listed}"
+    );
+}
+
+/// Sparse state must survive stock `git sparse-checkout` being run inside the
+/// submodule. That porcelain sets `extensions.worktreeConfig` and moves
+/// `core.sparseCheckout` into `config.worktree`, which outranks the plain
+/// config; picky writing the key by hand meant every later `reapply` died with
+/// "must be in a sparse-checkout".
+#[test]
+fn sparse_state_survives_stock_git_sparse_checkout() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // Disable sparsity behind picky's back, as a user poking at the submodule
+    // with stock git would.
+    git(&dep, &["sparse-checkout", "disable"]);
+    assert!(dep.join("drop").is_dir(), "stock disable materializes all");
+
+    let out = picky(&sup, &["update", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "update after a stock sparse-checkout disable: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !dep.join("drop").exists(),
+        "declared patterns should be reasserted"
+    );
+    assert!(dep.join("src").is_dir());
+}
+
 #[test]
 fn sparse_list_with_no_path_lists_every_submodule() {
     let (tmp, url, v1) = remote_fixture();

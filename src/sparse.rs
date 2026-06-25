@@ -80,25 +80,33 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
         git::run(wt, &["config", "remote.origin.partialclonefilter", filter])?;
     }
 
-    let sparse_on = !sm.sparse.is_empty();
-    git::run(
-        wt,
-        &[
-            "config",
-            "core.sparseCheckout",
-            if sparse_on { "true" } else { "false" },
-        ],
-    )?;
-    git::run(wt, &["config", "core.sparseCheckoutCone", "false"])?;
-    if sparse_on {
-        let info = gitdir.join("info");
-        fs::create_dir_all(&info)?;
-        let mut body = sm.sparse.join("\n");
-        body.push('\n');
-        fs::write(info.join("sparse-checkout"), body)
-            .context("writing sparse-checkout patterns")?;
-    }
+    set_sparse_state(wt, sm)?;
     Ok(gitdir)
+}
+
+/// Drive the submodule's sparse state through `git sparse-checkout`.
+///
+/// Deliberately not a hand-written `core.sparseCheckout` + `info/sparse-checkout`:
+///
+/// - The porcelain sets `extensions.worktreeConfig` and keeps
+///   `core.sparseCheckout` in `config.worktree`, which outranks the plain
+///   config a manual `git config` write touches. Mixing the two leaves the key
+///   set in both files with the worktree copy winning, and every later
+///   `sparse-checkout reapply` dies with "must be in a sparse-checkout".
+/// - Dropping every pattern needs `disable`, which clears the index's
+///   `skip-worktree` bits and re-materializes the excluded files. Setting
+///   `core.sparseCheckout=false` alone leaves those bits set, so the files
+///   stay missing from a checkout that now claims to be full.
+fn set_sparse_state(wt: &Path, sm: &Submodule) -> Result<()> {
+    if sm.sparse.is_empty() {
+        return git::run(wt, &["sparse-checkout", "disable"])
+            .context("disabling sparse checkout");
+    }
+    // `--skip-checks` keeps git from second-guessing non-cone patterns (it
+    // warns about leading `/` and `*`, which is exactly what these are).
+    let mut args = vec!["sparse-checkout", "set", "--no-cone", "--skip-checks", "--"];
+    args.extend(sm.sparse.iter().map(String::as_str));
+    git::run(wt, &args).context("applying sparse-checkout patterns")
 }
 
 /// Fetch `committish` shallow + blobless (per the submodule's filter/depth) if
@@ -150,9 +158,13 @@ pub fn checkout(root: &Path, sm: &Submodule, refish: &str, con: &Console) -> Res
     // `-f` repopulates the tree even when the index already matches but files
     // are missing (a wiped or half-built tree).
     git::run(&wt, &["checkout", "-q", "-f", "--detach", refish])?;
-    if !sm.sparse.is_empty() {
-        git::run(&wt, &["sparse-checkout", "reapply"])?;
-    }
+    // Reconcile the sparse state rather than a bare `sparse-checkout reapply`:
+    // `update` never runs `prepare`, so this is the only place a checkout that
+    // drifted (patterns edited in `.gitmodules`, or `git sparse-checkout`
+    // toggled by hand inside the submodule) converges back onto the declared
+    // patterns. `reapply` alone dies with "must be in a sparse-checkout" the
+    // moment sparsity was disabled underneath us.
+    set_sparse_state(&wt, sm)?;
     Ok(())
 }
 
