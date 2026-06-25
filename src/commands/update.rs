@@ -1,7 +1,7 @@
 //! `picky update [<path>] [<ref>] …` — bump the pin / re-checkout / re-apply the
 //! patch stack. The `bump-duckdb.sh` equivalent.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 use crate::config::{self, Submodule};
@@ -91,7 +91,22 @@ pub fn run(
             // Default: fetch only the target ref, shallow + blobless (like
             // `add`) — no history download, and a bare branch lands on the fresh
             // remote tip via FETCH_HEAD (no stale-local-ref footgun).
-            sparse::fetch_ref(root, &sm, &refish, con)?;
+            //
+            // Caveat: many git servers refuse to fetch an arbitrary commit SHA
+            // directly unless it's an advertised branch/tag tip
+            // (`uploadpack.allowReachableSHA1InWant`/`allowAnySHA1InWant`
+            // unset) — `--unshallow` sidesteps this by fetching full history
+            // instead, so the SHA is already present locally to check out.
+            sparse::fetch_ref(root, &sm, &refish, con).with_context(|| {
+                format!(
+                    "fetching '{refish}' failed — if it's a commit SHA, the \
+                     remote may be refusing to fetch it directly (only \
+                     advertised branch/tag tips); try \
+                     `picky update {} {refish} --unshallow` to fetch full \
+                     history and resolve it from there",
+                    sm.path
+                )
+            })?;
             refish = "FETCH_HEAD".to_string();
         }
     }

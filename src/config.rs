@@ -147,33 +147,65 @@ pub fn set_sparse(root: &Path, name: &str, patterns: &[String]) -> Result<()> {
 }
 
 /// Write a submodule entry into `.gitmodules` (used by `picky add`). Git's keys
-/// go in `submodule.<name>.*`, picky's in `picky.<name>.*`.
+/// go in `submodule.<name>.*`, picky's in `picky.<name>.*`. Fully declarative:
+/// an absent optional field *clears* any previously-written value, so
+/// re-running `write` for an existing name converges to exactly `sm` instead
+/// of unioning old and new (e.g. re-adding without `--branch` drops a
+/// previously-set branch rather than leaving it stale).
 pub fn write(root: &Path, sm: &Submodule) -> Result<()> {
     let sub = |k: &str| format!("submodule.{}.{}", sm.name, k);
     let own = |k: &str| format!("picky.{}.{}", sm.name, k);
-    let set = |k: &str, v: &str| git::run(root, &["config", "-f", FILE, k, v]);
 
-    set(&sub("path"), &sm.path)?;
-    set(&sub("url"), &sm.url)?;
-    if let Some(branch) = &sm.branch {
-        set(&sub("branch"), branch)?;
-    }
-    if sm.shallow {
-        set(&sub("shallow"), "true")?;
-    }
-    if let Some(depth) = sm.depth {
-        set(&own("depth"), &depth.to_string())?;
-    }
-    if let Some(filter) = &sm.filter {
-        set(&own("filter"), filter)?;
-    }
-    if let Some(patches) = &sm.patches {
-        set(&own("patches"), patches)?;
-    }
-    if let Some(post_update) = &sm.post_update {
-        set(&own("postUpdate"), post_update)?;
-    }
+    git::run(root, &["config", "-f", FILE, &sub("path"), &sm.path])?;
+    git::run(root, &["config", "-f", FILE, &sub("url"), &sm.url])?;
+    set_or_unset(root, &sub("branch"), sm.branch.as_deref())?;
+    set_or_unset(root, &sub("shallow"), sm.shallow.then_some("true"))?;
+    let depth = sm.depth.map(|d| d.to_string());
+    set_or_unset(root, &own("depth"), depth.as_deref())?;
+    set_or_unset(root, &own("filter"), sm.filter.as_deref())?;
+    set_or_unset(root, &own("patches"), sm.patches.as_deref())?;
+    set_or_unset(root, &own("postUpdate"), sm.post_update.as_deref())?;
     // Multivalued: clear any prior list, then append each pattern.
     set_sparse(root, &sm.name, &sm.sparse)?;
+    Ok(())
+}
+
+/// Set `key` to `value`, or unset it (best-effort — a key that was never set
+/// is not an error) when `value` is `None`. The primitive that makes
+/// [`write`] declarative rather than additive.
+fn set_or_unset(root: &Path, key: &str, value: Option<&str>) -> Result<()> {
+    match value {
+        Some(v) => git::run(root, &["config", "-f", FILE, key, v]),
+        None => {
+            let _ = git::ok(root, &["config", "-f", FILE, "--unset", key]);
+            Ok(())
+        }
+    }
+}
+
+/// Remove a submodule's declaration from `.gitmodules`: git's
+/// `submodule.<name>` section and picky's own `picky.<name>` section (which
+/// may not exist if no picky-specific option was ever set).
+pub fn remove(root: &Path, name: &str) -> Result<()> {
+    git::run(
+        root,
+        &[
+            "config",
+            "-f",
+            FILE,
+            "--remove-section",
+            &format!("submodule.{name}"),
+        ],
+    )?;
+    let _ = git::ok(
+        root,
+        &[
+            "config",
+            "-f",
+            FILE,
+            "--remove-section",
+            &format!("picky.{name}"),
+        ],
+    );
     Ok(())
 }

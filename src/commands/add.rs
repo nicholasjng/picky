@@ -1,5 +1,5 @@
-//! `picky add <url> <path> …` — write the `.gitmodules` entry, then build the
-//! sparse checkout and stage the new gitlink.
+//! `picky add <url> <path> …` — build the sparse checkout, then write and
+//! stage the `.gitmodules` entry and the new gitlink.
 
 use anyhow::Result;
 use std::path::Path;
@@ -38,9 +38,10 @@ pub fn run(
     };
 
     con.heading(format!("adding submodule {}", sm.path));
-    config::write(root, &sm)?;
-    git::run(root, &["add", ".gitmodules"])?;
 
+    // Build the checkout first, entirely from the in-memory `sm` — nothing
+    // touches `.gitmodules` on disk until it succeeds, so a failed add (bad
+    // URL, bad --ref, network) leaves no half-declared submodule behind.
     sparse::prepare(root, &sm, con)?;
 
     // No gitlink exists yet, so fetch the requested ref (or the remote HEAD)
@@ -50,8 +51,10 @@ pub fn run(
     sparse::checkout(root, &sm, "FETCH_HEAD", con)?;
     hook::run_post_update(root, &sm, con)?;
 
-    // Record the gitlink in the superproject index. Suppress git's
-    // "embedded git repository" hint — a gitlink is exactly what we want.
+    // Only now record + stage the declaration. Suppress git's "embedded git
+    // repository" hint — a gitlink is exactly what we want.
+    config::write(root, &sm)?;
+    git::run(root, &["add", ".gitmodules"])?;
     git::run(
         root,
         &["-c", "advice.addEmbeddedRepo=false", "add", &sm.path],
