@@ -2,6 +2,14 @@
 name = "picky"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Lightweight sparse-checkout client for git submodules"
+license = "Apache-2.0"
+repository = "https://github.com/nicholasjng/picky"
+readme = "README.md"
+keywords = ["git", "submodule", "sparse-checkout", "shallow", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["CLAUDE.md", "PLAN.md", ".tutor"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }

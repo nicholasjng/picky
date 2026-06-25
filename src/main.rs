@@ -1,12 +1,3 @@
-mod commands;
-mod config;
-mod console;
-mod git;
-mod hook;
-mod patch;
-mod refcache;
-mod sparse;
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,8 +5,9 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate, Shell};
 
-use config::Submodule;
-use console::Console;
+use picky::config::{self, Submodule};
+use picky::console::Console;
+use picky::{commands, git, refcache};
 
 /// Runtime completion candidates: the submodule paths declared in the current
 /// repo's `.gitmodules`. Errors (not in a repo, no `.gitmodules`) yield no

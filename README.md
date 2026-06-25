@@ -33,7 +33,10 @@ driven by a `.gitmodules` entry.
 ## Install
 
 ```sh
-# from a clone of this repo
+# straight from git, no checkout needed
+cargo install --git https://github.com/nicholasjng/picky
+
+# …or from a local clone of this repo
 cargo install --path .          # installs `picky` into ~/.cargo/bin
 ```
 
