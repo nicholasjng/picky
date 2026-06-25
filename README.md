@@ -18,7 +18,7 @@ hook.
 picky generalizes the hand-written `sh` setup scripts that several of my projects had each reinvented:
 
 - **MLIR out of LLVM.** Building MLIR needs LLVM's core, `cmake/`, `third-party/`
-  and all of `mlir/` - but not clang, lldb, flang, the runtimes, or LLVM's
+  and all of `mlir/`, but not clang, lldb, flang, the runtimes, or LLVM's
   ~1.2 GB `test/` tree. A sparse, blobless, depth-1 checkout of
   `llvm/llvm-project` lands the working tree at **~310 MB instead of ~8 GB**.
 - **DuckDB with local patches.** A sparse checkout of `duckdb/duckdb` trims the
@@ -37,7 +37,7 @@ cargo install --git https://github.com/nicholasjng/picky
 cargo install --path .
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for `GIT_NO_LAZY_FETCH`) on `PATH` at runtime, plus a Unix-like shell environment (`sh` for the post-update hook, `du` for working-tree sizing in `status`/`add`) — Linux, macOS, WSL, or Git Bash. Native Windows (cmd/PowerShell without WSL) is not supported.
+Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for `GIT_NO_LAZY_FETCH`) on `PATH` at runtime, plus a Unix-like shell environment (`sh` for the post-update hook, `du` for working-tree sizing in `status`/`add`): Linux, macOS, WSL, or Git Bash. Native Windows (cmd/PowerShell without WSL) is not supported.
 
 ## Quick start
 
@@ -48,6 +48,8 @@ picky init                      # reconstruct every declared submodule
 picky init ext/duckdb           # …or just one
 picky status                    # show pins, sparse state, sizes, patch counts
 picky update ext/duckdb v1.6.3  # bump the pin, re-checkout, re-apply patches
+picky update --all              # refresh every submodule at its current pin (no bump)
+picky doctor                    # sanity-check .gitmodules vs. what's actually on disk
 ```
 
 Or add a new sparse submodule from scratch:
@@ -60,7 +62,7 @@ picky add https://github.com/duckdb/duckdb.git ext/duckdb \
 ```
 
 `add` builds the checkout first; only once it succeeds does it write `.gitmodules`
-and stage both it and the new gitlink - commit them to record the submodule. A
+and stage both it and the new gitlink, commit them to record the submodule. A
 failed `add` (bad URL, bad `--ref`, network) leaves no trace in `.gitmodules`.
 
 Removing a submodule is the inverse:
@@ -71,8 +73,10 @@ picky remove ext/duckdb
 
 This deletes the working tree and the submodule's git dir, drops the gitlink
 from the index, and strips its `submodule.<name>`/`picky.<name>` sections from
-`.gitmodules` - staging all of it for you to commit. There's no bare `picky
-remove` with no args; paths are always explicit.
+`.gitmodules`, staging all of it for you to commit. There's no bare `picky
+remove` with no args; paths are always explicit. It asks for confirmation
+before deleting anything (`y`/`N`); pass `--yes`/`-y` to skip the prompt for
+scripted use, required when not running attached to a terminal.
 
 ## How it works
 
@@ -89,7 +93,7 @@ For each submodule, `picky`:
 4. checks it out and runs `sparse-checkout reapply`.
 
 Blobs for in-sparse files are lazy-fetched from the promisor on checkout;
-out-of-sparse blobs are never fetched. Every command is idempotent - a fresh
+out-of-sparse blobs are never fetched. Every command is idempotent: a fresh
 clone, a half-finished run, or an existing full checkout all converge to the
 same state.
 
@@ -112,9 +116,9 @@ options live in a parallel `picky.<name>` section that stock git ignores entirel
 | `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
 | `picky.<name>.postUpdate`  | picky | shell command run after each checkout (post-update hook) |
 
-The `picky.<name>` section holds **only** the options git doesn't understand -
+The `picky.<name>` section holds **only** the options git doesn't understand;
 nothing is duplicated from the `submodule.<name>` section. The pin (gitlink SHA)
-lives where git already keeps it - the superproject tree (`git ls-files -s
+lives where git already keeps it, the superproject tree (`git ls-files -s
 <path>`); no extra config file is introduced.
 
 Example:
@@ -159,7 +163,7 @@ with metacharacters like `/extension/*.cmake` work without the `git config
 
 `set`, `add`, and `remove` can read newline-delimited patterns from a file
 (`--from <file>`) or stdin (`--stdin`) instead of (or in addition to) positional
-arguments - handy for a long list. Blank lines and `#` comments are skipped, so
+arguments, handy for a long list. Blank lines and `#` comments are skipped, so
 a pattern file doubles as documentation:
 
 ```sh
@@ -198,7 +202,7 @@ tree for you to resolve. Skip the stack with `picky update --no-patches`.
 
 ## Post-update hook
 
-A submodule may declare `picky.<name>.postUpdate` - a shell command run after
+A submodule may declare `picky.<name>.postUpdate`, a shell command run after
 its working tree is (re)materialized by `add`, `init`, or `update` (in the latter
 case, after the patch stack). It runs through `sh -c` **in the submodule's
 working tree**, and a non-zero exit is fatal.
@@ -222,11 +226,11 @@ git config -f .gitmodules picky.ext/duckdb.postUpdate \
 ### Trust
 
 `postUpdate` comes from `.gitmodules`, which is committed and travels with the
-repo - in a clone of someone else's repo it's attacker-controlled text. So it
-is never run unconditionally: the first time picky sees a given hook command
-for a submodule, it prints the command and asks for interactive approval
-before running it. Approval is recorded **locally** (`picky.<name>.trustedPostUpdate`
-in `.git/config`, never `.gitmodules`) and is remembered verbatim - editing the
+repo, so in a clone of someone else's repo it's attacker-controlled text. It's
+never run unconditionally: the first time picky sees a given hook command for
+a submodule, it prints the command and asks for interactive approval before
+running it. Approval is recorded **locally** (`picky.<name>.trustedPostUpdate`
+in `.git/config`, never `.gitmodules`) and remembered verbatim; editing the
 hook command invalidates the old approval and triggers a re-prompt.
 
 Running non-interactively (CI, scripts) with an unapproved hook fails with
@@ -238,7 +242,7 @@ git config picky.ext/duckdb.trustedPostUpdate 'cmake -P cmake/OverrideGitDescrib
 ```
 
 or set `PICKY_TRUST_HOOKS=1` in the environment to auto-approve (and persist)
-any hook it encounters - useful for CI that already trusts the checked-out
+any hook it encounters, useful for CI that already trusts the checked-out
 content.
 
 ## Commands
@@ -246,12 +250,14 @@ content.
 | Command | Purpose |
 |---|---|
 | `picky add <url> <path> [opts]` | declare + check out a new sparse submodule |
-| `picky remove <path>…`          | undeclare a submodule and delete its checkout (the inverse of `add`) |
+| `picky remove <path>… [--yes]`  | undeclare a submodule and delete its checkout (the inverse of `add`) |
 | `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
+| `picky update --all`            | refresh every declared submodule at its current pin (no bump) |
 | `picky sparse <list/add/remove/set/clear>` | edit sparse patterns + reconcile |
-| `picky status [<path>…]`        | table of pin, branch, sparse, filter, size, patches |
-| `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion) |
+| `picky status [<path>…] [--json]` | table (or JSON) of pin, branch, upstream staleness, sparse, filter, size, patches |
+| `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion and `status`'s upstream column) |
+| `picky doctor [--strict]`       | sanity-check submodule state against `.gitmodules` (diagnostic by default) |
 | `picky completions <shell>`     | print the eval-able dynamic-completion registration script |
 
 Global flags: `-q/--quiet`, `-v/--verbose`. Color honors `NO_COLOR` and TTY
@@ -259,13 +265,43 @@ detection. Run `picky <command> --help` for the full option list.
 
 `update` accepts its two positionals smartly: with one argument, a value that
 matches a submodule path is treated as the path (refresh at current pin);
-otherwise it's treated as a ref against the lone submodule.
+otherwise it's treated as a ref against the lone submodule. `--all` refreshes
+every declared submodule at its current pin instead, and can't be combined
+with a path or ref.
 
-A bump fetches **only the target ref**, shallow + blobless - like `add` - so the
+A bump fetches **only the target ref**, shallow + blobless (like `add`), so the
 object store stays small and no history is downloaded. Pass `--unshallow` to
 instead fetch the full history and all tags (needed for `git describe`); note
 that on a large repo this fattens the (still blobless) object store with every
-tree and commit, which is rarely what you want.
+tree and commit, which is rarely what you want. If a default bump's fetch
+fails, that's often a server refusing to hand over an unadvertised commit SHA
+directly; the error suggests retrying with `--unshallow`.
+
+`status`'s `UPSTREAM` column compares the pin against the tracked branch's
+cached remote tip (`current`/`stale→<sha>`), or `-` when no branch is tracked
+(a bare SHA/tag pin has no "latest" to compare against). It's cache-only,
+`status` never hits the network, so run `picky refresh` first to populate or
+update it; a `?` means there's no cache yet. `picky status --json` emits the
+same fields as a JSON array (`[]` when there are no submodules) instead of the
+table, for scripting (hand-rolled, no `serde_json` dependency).
+
+`picky sparse list` (no `-p`) reports every declared submodule, like
+`status`/`init`/`refresh`'s "no path ⇒ all" convention. The mutating actions
+(`add`/`remove`/`set`/`clear`) still require `-p`/an unambiguous single
+submodule, since applying them to every submodule at once usually isn't what
+you want.
+
+`picky doctor` looks for state that usually comes from hand-editing
+`.gitmodules` instead of using `add`/`remove`/`sparse`: a dangling gitlink
+(worktree `.git` pointing at a missing git dir, self-heals on the next
+`init`), an orphaned `.git/modules/<path>` with no matching declaration, or a
+`picky.<name>` section with no matching `submodule.<name>` section. It only
+warns and exits 0 by default; pass `--strict` to exit 1 when issues are found,
+for a pre-commit hook or CI check.
+
+Every command checks the installed `git` up front and fails with a clear
+message if it's missing or older than 2.41 (needed for `GIT_NO_LAZY_FETCH`),
+rather than failing confusingly partway through.
 
 ## Shell completions
 
@@ -285,8 +321,9 @@ eval (picky completions elvish | slurp)
 Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`. `picky` must be
 installed and on your `PATH` for completion to work.
 
-You then get `<TAB>` completion on submodule paths (`init`, `update`, `sparse`,
-`status`) and on remote tags/branches for `picky update <path> <TAB>`.
+You then get `<TAB>` completion on submodule paths (`init`, `update`, `remove`,
+`sparse`, `status`, `refresh`) and on remote tags/branches for
+`picky update <path> <TAB>`.
 
 ## Use as a library
 
@@ -310,7 +347,8 @@ for sm in picky::submodules(&root)? {            // -> Vec<picky::Submodule>
 picky::init(&root, &[], &Console::silent())?;     // reconstruct every submodule
 picky::update(                                    // bump one
     &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
-    /*no_patches*/ false, /*unshallow*/ false, /*depth*/ None, &Console::silent(),
+    /*no_patches*/ false, /*unshallow*/ false, /*depth*/ None,
+    /*all*/ false, &Console::silent(),
 )?;
 ```
 
@@ -318,10 +356,10 @@ The high-level helpers (`init`, `update`, `set_sparse`, …) and the full module
 surface (`picky::commands`, `picky::config`, `picky::sparse`, …) take a
 `Console` for progress output. Pick one of:
 
-- `Console::new(quiet, verbose)` - colored output to stdout/stderr (the CLI
+- `Console::new(quiet, verbose)`: colored output to stdout/stderr (the CLI
   default).
-- `Console::silent()` - discards everything (the `/dev/null` sink).
-- `Console::with_sink(|level, msg| …)` - forward each message to your own sink
+- `Console::silent()`: discards everything (the `/dev/null` sink).
+- `Console::with_sink(|level, msg| …)`: forward each message to your own sink
   (a channel, a Tauri event, a log) as a `(Level, &str)` pair:
 
 ```rust
@@ -333,7 +371,7 @@ let con = picky::Console::with_sink(move |level, msg: &str| {
 // drive picky with `&con`, drain `rx` to render progress in your UI
 ```
 
-`Console` is `Send + Sync`, so it can live in shared application state. 
+`Console` is `Send + Sync`, so it can live in shared application state.
 The `git` CLI must be on `PATH` at runtime, as for the binary.
 
 ## Local development
