@@ -1,4 +1,4 @@
-//! picky as a library — the sparse-checkout engine behind the `picky` CLI,
+//! picky as a library: the sparse-checkout engine behind the `picky` CLI,
 //! exposed for embedding (e.g. a Tauri backend). Everything shells out to the
 //! `git` CLI, which must be on `PATH` at runtime.
 //!
@@ -6,7 +6,8 @@
 //!
 //! The high-level operations live in [`commands`]; the convenience wrappers
 //! below ([`init`], [`update`], [`set_sparse`], …) call into them. Each takes a
-//! [`Console`] for progress output — pass [`quiet`] when you don't want any.
+//! [`Console`] for progress output; pass [`Console::silent`] when you don't
+//! want any.
 //!
 //! Two things for a GUI integration:
 //!
@@ -26,7 +27,7 @@
 //! picky::init(&root, &[], &Console::silent())?;              // reconstruct all
 //! picky::update(                                             // bump one
 //!     &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
-//!     false, false, None, &Console::silent(),
+//!     false, false, None, false, &Console::silent(),
 //! )?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
@@ -61,14 +62,19 @@ pub fn init(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     commands::init::run(root, paths, con)
 }
 
-/// Undeclare submodule(s) and delete their checkouts — the inverse of
+/// Undeclare submodule(s) and delete their checkouts: the inverse of
 /// [`commands::add::run`]. `paths` must be non-empty; there is no "remove all".
-pub fn remove(root: &Path, paths: &[String], con: &Console) -> Result<()> {
-    commands::remove::run(root, paths, con)
+/// `yes` skips the interactive confirmation prompt (required when not
+/// running attached to a terminal).
+pub fn remove(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()> {
+    commands::remove::run(root, paths, yes, con)
 }
 
 /// Bump the pin / re-checkout / re-apply the patch stack. See
-/// [`commands::update::run`] for the positional and flag semantics.
+/// [`commands::update::run`] for the positional and flag semantics. `all`
+/// refreshes every declared submodule at its current pin instead (mutually
+/// exclusive with `target`/`reference`).
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     root: &Path,
     target: Option<String>,
@@ -76,9 +82,12 @@ pub fn update(
     no_patches: bool,
     unshallow: bool,
     depth: Option<u32>,
+    all: bool,
     con: &Console,
 ) -> Result<()> {
-    commands::update::run(root, target, reference, no_patches, unshallow, depth, con)
+    commands::update::run(
+        root, target, reference, no_patches, unshallow, depth, all, con,
+    )
 }
 
 /// Replace a submodule's sparse pattern list and reconcile the checkout. `path`
