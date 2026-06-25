@@ -170,9 +170,12 @@ enum Commands {
     },
     /// Undeclare a submodule and delete its checkout (the inverse of `add`)
     Remove {
-        /// Submodule paths to remove — required, no implicit "remove all"
+        /// Submodule paths to remove; required, no implicit "remove all"
         #[arg(add = ArgValueCandidates::new(submodule_candidates))]
         paths: Vec<String>,
+        /// Skip the confirmation prompt
+        #[arg(long, short)]
+        yes: bool,
     },
     /// Bump a submodule pin / re-checkout / re-apply the patch stack
     Update {
@@ -192,6 +195,10 @@ enum Commands {
         /// Override the shallow fetch depth
         #[arg(long)]
         depth: Option<u32>,
+        /// Refresh every declared submodule at its current pin (no bump);
+        /// can't be combined with a path or ref
+        #[arg(long, conflicts_with_all = ["target", "reference"])]
+        all: bool,
     },
     /// Edit a submodule's sparse-checkout patterns and reconcile the checkout
     Sparse {
@@ -342,7 +349,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             con,
         ),
         Commands::Init { paths } => commands::init::run(&root, &paths, con),
-        Commands::Remove { paths } => commands::remove::run(&root, &paths, con),
+        Commands::Remove { paths, yes } => commands::remove::run(&root, &paths, yes, con),
         Commands::Update {
             target,
             reference,

@@ -5,6 +5,21 @@
 
 use anstyle::{AnsiColor, Color, Style};
 use std::fmt::Display;
+use std::io::Write;
+
+/// Print `prompt` to stderr and read a y/N answer from stdin. Callers must
+/// have already established stdin is a terminal (via [`std::io::IsTerminal`]);
+/// this is just the I/O, so the "no terminal to prompt" case gets a
+/// caller-specific error message instead of a generic one here.
+pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| anyhow::anyhow!("reading confirmation from stdin: {e}"))?;
+    Ok(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
+}
 
 /// The kind of a message, so a custom [`Sink`] can route or style it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +129,7 @@ impl Console {
     }
 
     /// Console that forwards messages to a custom [`Sink`] (a value or a
-    /// `Fn(Level, &str)` closure) — for embedding, e.g. piping progress into a
+    /// `Fn(Level, &str)` closure), for embedding: piping progress into a
     /// channel or a Tauri event. Filtering is off (`quiet = false`,
     /// `verbose = true`), so the sink sees every level, including `Detail`.
     pub fn with_sink(sink: impl Sink + 'static) -> Self {
@@ -125,10 +140,10 @@ impl Console {
         }
     }
 
-    /// A console that discards every message — the `/dev/null` sink. Use this to
-    /// run picky completely silently (e.g. when embedding and driving the UI
-    /// yourself), unlike `--quiet`/[`Console::new`], which still emits headings,
-    /// results and diagnostics.
+    /// A console that discards every message, the `/dev/null` sink. Use this
+    /// to run picky completely silently (e.g. when embedding and driving the
+    /// UI yourself), unlike `--quiet`/[`Console::new`], which still emits
+    /// headings, results and diagnostics.
     pub fn silent() -> Self {
         Self::with_sink(|_: Level, _: &str| {})
     }
