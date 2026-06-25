@@ -1,7 +1,6 @@
 //! Submodule git-dir construction plus partial-clone, promisor and
-//! sparse-checkout configuration. This is the reusable core of `init-duckdb.sh`,
-//! kept idempotent so a fresh clone, a half-finished run, or an existing full
-//! checkout all converge to the same state.
+//! sparse-checkout configuration — the reusable core of `init-duckdb.sh`, kept
+//! idempotent so any prior state converges to the same checkout.
 
 use anyhow::{Context, Result, anyhow};
 use std::fs;
@@ -38,8 +37,24 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
     let gitdir = gitdir(root, sm)?;
     let worktree = root.join(&sm.path);
 
-    if !worktree.join(".git").exists() {
-        con.step("Creating git dir");
+    // Create the git dir when the worktree has no usable repo. A plain `.git`
+    // existence check is fooled by a *dangling* gitlink (git dir deleted, file
+    // left behind), so validate the link with `rev-parse --resolve-git-dir`
+    // (which doesn't walk up to the superproject) and rebuild if it's stale.
+    let dotgit = worktree.join(".git");
+    let dotgit_s = dotgit.to_str().context("`.git` path is not UTF-8")?;
+    let valid = dotgit.exists() && git::ok(root, &["rev-parse", "--resolve-git-dir", dotgit_s])?;
+    if !valid {
+        if dotgit.exists() {
+            con.step("Rebuilding git dir (stale gitlink)");
+            if dotgit.is_dir() {
+                fs::remove_dir_all(&dotgit)?;
+            } else {
+                fs::remove_file(&dotgit)?;
+            }
+        } else {
+            con.step("Creating git dir");
+        }
         if let Some(parent) = gitdir.parent() {
             fs::create_dir_all(parent)?;
         }

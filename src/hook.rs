@@ -1,7 +1,6 @@
 //! The optional post-update hook: a shell command a submodule may declare via
-//! `picky.<name>.postUpdate`, run after its working tree is (re)materialized.
-//! This is the seam for project-specific glue like ducky's `OVERRIDE_GIT_DESCRIBE`
-//! CMake rewrite, which v1 deliberately leaves out of the core.
+//! `picky.<name>.postUpdate`, run after its working tree is (re)materialized —
+//! the seam for project-specific glue like ducky's `OVERRIDE_GIT_DESCRIBE` rewrite.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;

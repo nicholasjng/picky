@@ -256,6 +256,31 @@ fn init_is_idempotent() {
 }
 
 #[test]
+fn init_rebuilds_after_gitdir_deleted() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert!(dep.join("src").is_dir());
+
+    // Delete ONLY the submodule git dir, leaving the now-dangling `.git`
+    // gitlink in the worktree (a common "let me start the submodule over" move).
+    let gitdir = sup.join(".git/modules/ext/dep");
+    assert!(gitdir.is_dir());
+    std::fs::remove_dir_all(&gitdir).unwrap();
+    assert!(dep.join(".git").exists(), "dangling gitlink should remain");
+
+    // Re-init must rebuild the git dir, not fail on `remote add`.
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(gitdir.is_dir(), "git dir should be rebuilt");
+    assert!(dep.join("src").is_dir(), "sparse checkout restored");
+}
+
+#[test]
 fn update_moves_the_pin() {
     let (_tmp, sup, v1) = fixture(&["/src/"], None);
     let dep = sup.join("ext/dep");
@@ -275,6 +300,36 @@ fn update_moves_the_pin() {
             .unwrap()
             .contains("line4")
     );
+    // A default bump fetches only the target ref: the clone stays shallow, so
+    // no full history was downloaded.
+    assert_eq!(
+        git(&dep, &["rev-parse", "--is-shallow-repository"]),
+        "true",
+        "default bump must not unshallow the submodule"
+    );
+}
+
+#[test]
+fn update_unshallow_flag_fetches_history() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert_eq!(git(&dep, &["rev-parse", "--is-shallow-repository"]), "true");
+
+    let out = picky(&sup, &["update", "ext/dep", "v2", "--unshallow"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // --unshallow opts into the full history, so the clone is no longer shallow
+    // and `git describe` can resolve a tag.
+    assert_eq!(
+        git(&dep, &["rev-parse", "--is-shallow-repository"]),
+        "false",
+        "--unshallow must fetch full history"
+    );
+    assert_eq!(git(&dep, &["describe", "--tags"]), "v2");
 }
 
 #[test]

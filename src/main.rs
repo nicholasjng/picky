@@ -187,6 +187,10 @@ enum Commands {
         /// Skip the patch stack
         #[arg(long)]
         no_patches: bool,
+        /// Fetch full history + all tags (needed for `git describe`); fattens
+        /// the object store. Default fetches only the target ref, shallow.
+        #[arg(long)]
+        unshallow: bool,
         /// Override the shallow fetch depth
         #[arg(long)]
         depth: Option<u32>,
@@ -286,8 +290,8 @@ enum SparseAction {
 }
 
 fn main() {
-    // Handle dynamic shell-completion requests (when COMPLETE=<shell> is set)
-    // before any normal parsing or output; exits the process if it ran.
+    // Serve dynamic completion requests (COMPLETE=<shell> set) before any
+    // normal parsing; exits the process if it ran.
     CompleteEnv::with_factory(Cli::command).complete();
 
     let cli = Cli::parse();
@@ -337,8 +341,9 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             target,
             reference,
             no_patches,
+            unshallow,
             depth,
-        } => commands::update::run(&root, target, reference, no_patches, depth, con),
+        } => commands::update::run(&root, target, reference, no_patches, unshallow, depth, con),
         Commands::Sparse { action } => {
             use commands::sparse::{self, Action};
             let (path, op, no_reinit) = match action {

@@ -1,8 +1,7 @@
-//! The declarative submodule model, read from and written to `.gitmodules`
-//! via `git config -f`. Git's standard keys live in the `submodule.<name>`
-//! section it understands (`path`, `url`, `branch`, `shallow`); picky's own
-//! options live in a parallel `picky.<name>` section that stock git ignores
-//! entirely, joined by the shared subsection name.
+//! The declarative submodule model, read/written via `git config -f .gitmodules`.
+//! Git's standard keys live in `submodule.<name>` (`path`, `url`, `branch`,
+//! `shallow`); picky's own options live in a parallel `picky.<name>` section
+//! that stock git ignores, joined by the shared subsection name.
 
 use anyhow::{Result, bail};
 use std::path::Path;

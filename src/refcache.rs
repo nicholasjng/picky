@@ -1,11 +1,7 @@
-//! Cache of a submodule remote's ref names, for fast `<ref>` completion.
-//!
-//! `git ls-remote` hits the network, which is too slow for a TAB press, so its
-//! result is cached per-remote under the user cache dir with a TTL. Completion
-//! reads the cache instantly; a stale cache is still served (and a background
-//! refresh kicked) so TAB never blocks once warmed. With no cache at all, a
-//! single timeout-bounded `ls-remote` runs, decaying to the submodule's local
-//! refs (then nothing) on failure — so completion never errors or hangs.
+//! Cache of a remote's ref names for fast `<ref>` completion. `git ls-remote`
+//! is too slow for a TAB press, so results are cached per-remote with a TTL: a
+//! stale cache is still served (and a background refresh kicked); with no cache,
+//! one timeout-bounded `ls-remote` runs, decaying to local refs on failure.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -33,8 +29,7 @@ fn cache_file(url: &str) -> Option<PathBuf> {
     Some(cache_dir()?.join(fnv1a(url)))
 }
 
-/// FNV-1a 64-bit of the URL as a stable filename (no extra crate for hashing;
-/// collisions across a handful of remotes are not a concern).
+/// FNV-1a 64-bit of the URL as a stable filename — avoids a hashing crate.
 fn fnv1a(s: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in s.bytes() {

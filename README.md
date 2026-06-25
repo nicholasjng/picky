@@ -230,6 +230,14 @@ detection. Run `picky <command> --help` for the full option list.
 matches a submodule path is treated as the path (refresh at current pin);
 otherwise it's treated as a ref against the lone submodule.
 
+A bump fetches **only the target ref**, shallow + blobless — like `add` — so the
+object store stays small and no history is downloaded. Pass `--unshallow` to
+instead fetch the full history and all tags (needed for `git describe`); note
+that on a large repo this fattens the (still blobless) object store with every
+tree and commit, which is rarely what you want — prefer a static version string
+(e.g. a `postUpdate` hook that stamps `<version>-0-g<short-sha>`) over relying on
+`git describe`.
+
 ## Shell completions
 
 Add the line for your shell to its startup file:

@@ -13,6 +13,7 @@ pub fn run(
     arg1: Option<String>,
     arg2: Option<String>,
     no_patches: bool,
+    unshallow: bool,
     depth: Option<u32>,
     con: &Console,
 ) -> Result<()> {
@@ -54,37 +55,44 @@ pub fn run(
     let mut refish = refarg.unwrap_or_else(|| old_sha.clone());
 
     if bump {
-        // `describe`/history need the full graph; the checkout is shallow.
-        let shallow = git::capture(&wt, &["rev-parse", "--is-shallow-repository"])? == "true";
-        con.step("Fetching history + tags (blobless)");
-        let filter = sm.effective_filter().map(|f| format!("--filter={f}"));
-        let mut args = vec!["fetch", "--tags"];
-        if let Some(f) = &filter {
-            args.push(f);
-        }
-        if shallow {
-            args.push("--unshallow");
-        }
-        args.push("origin");
-        args.push("+refs/heads/*:refs/remotes/origin/*");
-        git::run(&wt, &args)?;
+        if unshallow {
+            // Opt-in: full history + all tags for `git describe`; fattens the
+            // (blobless) object store with every tree/commit on a big repo.
+            let shallow = git::capture(&wt, &["rev-parse", "--is-shallow-repository"])? == "true";
+            con.step("Fetching history + tags (blobless)");
+            let filter = sm.effective_filter().map(|f| format!("--filter={f}"));
+            let mut args = vec!["fetch", "--tags"];
+            if let Some(f) = &filter {
+                args.push(f);
+            }
+            if shallow {
+                args.push("--unshallow");
+            }
+            args.push("origin");
+            args.push("+refs/heads/*:refs/remotes/origin/*");
+            git::run(&wt, &args)?;
 
-        // A bare branch name resolves to the *local* branch ref, which the
-        // fetch above never advances. Prefer the freshly-fetched remote ref so
-        // we don't silently re-pin a stale local branch. (SHAs, tags, and an
-        // explicit `origin/<x>` have no `refs/remotes/origin/<ref>` and fall
-        // through unchanged.)
-        if git::ok(
-            &wt,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/remotes/origin/{refish}"),
-            ],
-        )? {
-            con.step(format!("Resolving '{refish}' to 'origin/{refish}'"));
-            refish = format!("origin/{refish}");
+            // A bare branch resolves to the stale *local* ref the fetch never
+            // advances; prefer the fresh remote-tracking ref. (SHAs, tags, and
+            // explicit `origin/<x>` have no such ref and fall through.)
+            if git::ok(
+                &wt,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/remotes/origin/{refish}"),
+                ],
+            )? {
+                con.step(format!("Resolving '{refish}' to 'origin/{refish}'"));
+                refish = format!("origin/{refish}");
+            }
+        } else {
+            // Default: fetch only the target ref, shallow + blobless (like
+            // `add`) — no history download, and a bare branch lands on the fresh
+            // remote tip via FETCH_HEAD (no stale-local-ref footgun).
+            sparse::fetch_ref(root, &sm, &refish, con)?;
+            refish = "FETCH_HEAD".to_string();
         }
     }
 

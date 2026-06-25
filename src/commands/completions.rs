@@ -1,10 +1,7 @@
-//! `picky completions <shell>` — print the eval-able dynamic-completion
-//! registration script (à la `zoxide init`), so it can be wired up with
-//! `eval "$(picky completions zsh)"` / `source <(picky completions bash)`.
-//!
-//! picky uses clap_complete's completion *engine*: the registration script
-//! makes the shell call back into the binary (`COMPLETE=<shell> picky --`) at
-//! completion time, so e.g. `picky update <ref> <TAB>` reflects the live repo.
+//! `picky completions <shell>` — print the eval-able registration script for
+//! clap_complete's completion *engine* (à la `zoxide init`). The script makes
+//! the shell call back into the binary at completion time, so candidates reflect
+//! the live repo. Wire up with `eval "$(picky completions zsh)"`.
 
 use anyhow::{Result, bail};
 use clap_complete::Shell;
@@ -17,8 +14,7 @@ pub fn run(shell: Shell) -> Result<()> {
     let Some(completer) = shells.completer(&name) else {
         bail!("unsupported shell: {name}");
     };
-    // var=COMPLETE; script identifier + bin + completer command all "picky"
-    // (the binary must be on PATH for the callback to resolve).
+    // env var "COMPLETE"; name/bin/callback all "picky" (must be on PATH).
     completer.write_registration("COMPLETE", "picky", "picky", "picky", &mut io::stdout())?;
     Ok(())
 }
