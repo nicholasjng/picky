@@ -206,6 +206,28 @@ git config -f .gitmodules picky.ext/duckdb.postUpdate \
     'cmake -P cmake/OverrideGitDescribe.cmake'
 ```
 
+### Trust
+
+`postUpdate` comes from `.gitmodules`, which is committed and travels with the
+repo - in a clone of someone else's repo it's attacker-controlled text. So it
+is never run unconditionally: the first time picky sees a given hook command
+for a submodule, it prints the command and asks for interactive approval
+before running it. Approval is recorded **locally** (`picky.<name>.trustedPostUpdate`
+in `.git/config`, never `.gitmodules`) and is remembered verbatim - editing the
+hook command invalidates the old approval and triggers a re-prompt.
+
+Running non-interactively (CI, scripts) with an unapproved hook fails with
+guidance rather than silently skipping or silently running it. Either approve
+it once interactively beforehand, trust it directly:
+
+```sh
+git config picky.ext/duckdb.trustedPostUpdate 'cmake -P cmake/OverrideGitDescribe.cmake'
+```
+
+or set `PICKY_TRUST_HOOKS=1` in the environment to auto-approve (and persist)
+any hook it encounters - useful for CI that already trusts the checked-out
+content.
+
 ## Commands
 
 | Command | Purpose |

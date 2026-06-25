@@ -53,17 +53,25 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn picky(dir: &Path, args: &[&str]) -> Output {
-    Command::new(BIN)
-        .arg("--quiet")
+    picky_with_env(dir, args, &[])
+}
+
+/// Like [`picky`], with extra environment variables set on the child (e.g.
+/// `PICKY_TRUST_HOOKS`).
+fn picky_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--quiet")
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@t")
-        .env("XDG_CACHE_HOME", dir.join(".cache")) // isolate the ref cache
-        .output()
-        .unwrap()
+        .env("XDG_CACHE_HOME", dir.join(".cache")); // isolate the ref cache
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
 }
 
 /// Like [`picky`], but feeds `input` to the child's stdin (for `--stdin`).
@@ -496,16 +504,14 @@ fn sparse_set_replaces_list_from_file_and_stdin() {
 fn post_update_hook_runs_after_checkout() {
     let (_tmp, sup, _v1) = fixture(&["/src/"], None);
     // A hook that records the env vars picky exposes to it.
+    let cmd = "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran";
     git(
         &sup,
-        &[
-            "config",
-            "-f",
-            ".gitmodules",
-            "picky.ext/dep.postUpdate",
-            "printf '%s %s\\n' \"$PICKY_SUBMODULE_PATH\" \"$PICKY_SUBMODULE_SHA\" > .picky-hook-ran",
-        ],
+        &["config", "-f", ".gitmodules", "picky.ext/dep.postUpdate", cmd],
     );
+    // Pre-approve it in *local* (untracked) config — simulates a user who has
+    // already reviewed and trusted this exact hook text.
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", cmd]);
 
     let out = picky(&sup, &["init", "ext/dep"]);
     assert!(
@@ -535,10 +541,80 @@ fn post_update_hook_failure_is_fatal() {
             "exit 3",
         ],
     );
+    git(&sup, &["config", "picky.ext/dep.trustedPostUpdate", "exit 3"]);
 
     let out = picky(&sup, &["init", "ext/dep"]);
     assert!(
         !out.status.success(),
         "a failing post-update hook must fail the command"
+    );
+}
+
+#[test]
+fn post_update_hook_untrusted_is_refused_noninteractively() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    // Declared in .gitmodules but never approved anywhere — a hostile clone's
+    // hook must not run just because the checkout succeeded.
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            "touch .should-not-run",
+        ],
+    );
+
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        !out.status.success(),
+        "an unapproved post-update hook must not run"
+    );
+    assert!(
+        !sup.join("ext/dep/.should-not-run").exists(),
+        "hook must not have executed"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("trust") || stderr.contains("approve"),
+        "expected trust guidance in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn post_update_hook_trust_env_var_allows_and_persists() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            "touch .trusted-via-env",
+        ],
+    );
+
+    let out = picky_with_env(&sup, &["init", "ext/dep"], &[("PICKY_TRUST_HOOKS", "1")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(sup.join("ext/dep/.trusted-via-env").exists());
+
+    // The env-var approval was persisted to local config, so a later run
+    // doesn't need PICKY_TRUST_HOOKS again.
+    std::fs::remove_file(sup.join("ext/dep/.trusted-via-env")).unwrap();
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        sup.join("ext/dep/.trusted-via-env").exists(),
+        "trust should persist across runs"
     );
 }
