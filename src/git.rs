@@ -64,8 +64,8 @@ pub fn ok(dir: &Path, args: &[&str]) -> Result<bool> {
 
 /// Like [`ok`] but with extra environment variables set. Used to run the
 /// object-presence check with `GIT_NO_LAZY_FETCH=1`, so a configured promisor
-/// remote does not silently fetch (unfiltered, full-depth) the object we are
-/// only probing for — that would defeat our explicit shallow+blobless fetch.
+/// remote doesn't silently full-fetch the object we're only probing for and
+/// defeat our explicit shallow+blobless fetch.
 pub fn ok_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<bool> {
     let mut cmd = base(dir, args);
     for (k, v) in envs {
@@ -84,4 +84,81 @@ pub fn repo_root() -> Result<std::path::PathBuf> {
     let root = capture(Path::new("."), &["rev-parse", "--show-toplevel"])
         .context("not inside a git repository")?;
     Ok(std::path::PathBuf::from(root))
+}
+
+/// Minimum git version picky requires (`GIT_NO_LAZY_FETCH` was added in 2.41).
+const MIN_VERSION: (u32, u32, u32) = (2, 41, 0);
+
+/// Verify a `git` on `PATH` exists and is new enough, before any real git
+/// invocation runs. Without this, a missing git fails inside [`repo_root`]
+/// with a misattributed "not inside a git repository", and a too-old git
+/// fails confusingly deep inside whichever command first needs
+/// `GIT_NO_LAZY_FETCH`.
+pub fn check_version() -> Result<()> {
+    let out = Command::new("git").arg("--version").output().context(
+        "`git` not found on PATH: picky shells out to git and needs a recent version installed",
+    )?;
+    if !out.status.success() {
+        bail!("`git --version` failed");
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = parse_version(&text)
+        .with_context(|| format!("couldn't parse git version from: {}", text.trim()))?;
+    if version < MIN_VERSION {
+        bail!(
+            "picky requires git >= {}.{}.{} (for GIT_NO_LAZY_FETCH), found {}.{}.{}; please upgrade",
+            MIN_VERSION.0,
+            MIN_VERSION.1,
+            MIN_VERSION.2,
+            version.0,
+            version.1,
+            version.2,
+        );
+    }
+    Ok(())
+}
+
+/// Parse `"git version 2.55.0"` (possibly with a platform/distro suffix like
+/// `"2.55.0.windows.1"` or `"2.39.2 (Apple Git-143)"`) into `(major, minor,
+/// patch)`. A missing or unparseable patch component defaults to `0`.
+fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
+    let ver = text.trim().strip_prefix("git version ")?;
+    let leading_digits = |s: &str| -> Option<u32> {
+        s.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .ok()
+    };
+    let mut parts = ver.split('.');
+    let major = leading_digits(parts.next()?)?;
+    let minor = leading_digits(parts.next()?)?;
+    let patch = parts.next().and_then(leading_digits).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_version_handles_plain_and_suffixed_output() {
+        assert_eq!(parse_version("git version 2.55.0\n"), Some((2, 55, 0)));
+        assert_eq!(
+            parse_version("git version 2.39.2 (Apple Git-143)\n"),
+            Some((2, 39, 2))
+        );
+        assert_eq!(
+            parse_version("git version 2.41.0.windows.1\n"),
+            Some((2, 41, 0))
+        );
+        assert_eq!(parse_version("not git at all"), None);
+    }
+
+    #[test]
+    fn min_version_ordering() {
+        assert!((2, 40, 9) < MIN_VERSION);
+        assert!((2, 41, 0) >= MIN_VERSION);
+        assert!((3, 0, 0) >= MIN_VERSION);
+    }
 }
