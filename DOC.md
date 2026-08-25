@@ -3,6 +3,9 @@
 Everything beyond the one-page overview in [README.md](README.md): what picky
 does under the hood, how it is configured, and how to drive it from Rust.
 
+Looking for "how do I do X?" rather than "how does X work?" — see
+[QRH.md](QRH.md), the task-oriented quick reference.
+
 - [Motivating examples](#motivating-examples)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)

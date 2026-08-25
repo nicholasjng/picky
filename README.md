@@ -40,9 +40,11 @@ detection. Run `picky <command> --help` for the full option list.
 
 ## Documentation
 
-See **[DOC.md](DOC.md)** for the config schema, sparse pattern editing, the
-patch stack, post-update hooks and their trust model, shell completions, and
-use as a library.
+- **[QRH.md](QRH.md)** — quick reference: "the problem I have" → the commands
+  that solve it. Start here when you haven't touched submodules in a while.
+- **[DOC.md](DOC.md)** — full reference: config schema, sparse pattern editing,
+  the patch stack, post-update hooks and their trust model, shell completions,
+  and use as a library.
 
 ## Roadmap
 

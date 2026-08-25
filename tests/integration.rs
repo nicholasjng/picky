@@ -1,5 +1,5 @@
 //! End-to-end tests against a local `file://` blobless remote and a
-//! superproject that pins it. Mirrors PLAN.md's verification scenarios.
+//! superproject that pins it, covering the workflows in QRH.md.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
