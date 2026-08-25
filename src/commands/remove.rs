@@ -15,10 +15,8 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
     if paths.is_empty() {
         bail!("no submodule specified, pass one or more paths (there is no \"remove all\")");
     }
-    let targets: Vec<Submodule> = paths
-        .iter()
-        .map(|p| config::find(root, p))
-        .collect::<Result<_>>()?;
+    let cfg = config::Config::load(root)?;
+    let targets: Vec<Submodule> = paths.iter().map(|p| cfg.find(p)).collect::<Result<_>>()?;
 
     if !yes {
         con.warn(format!(

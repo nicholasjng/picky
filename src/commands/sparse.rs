@@ -69,8 +69,9 @@ pub fn run(
     // `list` is read-only, so (like `status`/`init`/`refresh`) no path means
     // every submodule instead of erroring on ambiguity. The mutating actions
     // keep requiring exactly one target.
+    let cfg = config::Config::load(root)?;
     if path.is_none() && matches!(action, Action::List) {
-        let subs = config::load_all(root)?;
+        let subs = cfg.all()?;
         if subs.is_empty() {
             con.warn("no submodules declared in .gitmodules");
             return Ok(());
@@ -82,8 +83,8 @@ pub fn run(
     }
 
     let sm = match path {
-        Some(p) => config::find(root, &p)?,
-        None => config::only(root)?,
+        Some(p) => cfg.find(&p)?,
+        None => cfg.only()?,
     };
 
     // Resolve the action into the next pattern list (or print + return for List).

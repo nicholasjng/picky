@@ -29,7 +29,7 @@ pub fn run(
                 "--all refreshes every submodule at its current pin and can't be combined with a path or ref"
             );
         }
-        let targets = config::load_all(root)?;
+        let targets = config::Config::load(root)?.all()?;
         if targets.is_empty() {
             con.warn("no submodules declared in .gitmodules");
             return Ok(());
@@ -44,13 +44,14 @@ pub fn run(
     // Resolve the two optional positionals into (submodule, ref). With two
     // args it is unambiguous; with one, a value matching a submodule is a path
     // (refresh), otherwise it is a ref against the lone submodule.
+    let cfg = config::Config::load(root)?;
     let (sm, refarg): (Submodule, Option<String>) = match (arg1, arg2) {
-        (Some(a), Some(b)) => (config::find(root, &a)?, Some(b)),
-        (Some(a), None) => match config::find(root, &a) {
+        (Some(a), Some(b)) => (cfg.find(&a)?, Some(b)),
+        (Some(a), None) => match cfg.find(&a) {
             Ok(sm) => (sm, None),
-            Err(_) => (config::only(root)?, Some(a)),
+            Err(_) => (cfg.only()?, Some(a)),
         },
-        (None, _) => (config::only(root)?, None),
+        (None, _) => (cfg.only()?, None),
     };
     update_one(root, sm, refarg, no_patches, unshallow, depth, fresh, con)
 }

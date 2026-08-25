@@ -10,13 +10,11 @@ use crate::console::Console;
 use crate::refcache;
 
 pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
+    let cfg = config::Config::load(root)?;
     let subs: Vec<Submodule> = if paths.is_empty() {
-        config::load_all(root)?
+        cfg.all()?
     } else {
-        paths
-            .iter()
-            .map(|p| config::find(root, p))
-            .collect::<Result<_>>()?
+        paths.iter().map(|p| cfg.find(p)).collect::<Result<_>>()?
     };
 
     for sm in &subs {

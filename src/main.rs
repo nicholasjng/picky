@@ -16,7 +16,10 @@ fn submodule_candidates() -> Vec<CompletionCandidate> {
     let Ok(root) = git::repo_root() else {
         return Vec::new();
     };
-    config::load_all(&root)
+    let Ok(cfg) = config::Config::load(&root) else {
+        return Vec::new();
+    };
+    cfg.all()
         .unwrap_or_default()
         .into_iter()
         .map(|sm| CompletionCandidate::new(sm.path).help(Some(sm.url.into())))
@@ -66,6 +69,7 @@ fn spawn_bg_refresh(path: &str) {
 /// The submodule whose refs to complete for `picky update`: the first declared
 /// submodule named on the command line, else the lone submodule.
 fn update_submodule(root: &Path) -> Option<Submodule> {
+    let cfg = config::Config::load(root).ok()?;
     let args: Vec<String> = std::env::args().collect();
     let after = args.iter().position(|a| a == "--").map(|i| &args[i + 1..]);
     let from_cmdline = after.and_then(|words| {
@@ -73,9 +77,9 @@ fn update_submodule(root: &Path) -> Option<Submodule> {
         words[pos + 1..]
             .iter()
             .filter(|w| !w.starts_with('-'))
-            .find_map(|w| config::find(root, w).ok())
+            .find_map(|w| cfg.find(w).ok())
     });
-    from_cmdline.or_else(|| config::only(root).ok())
+    from_cmdline.or_else(|| cfg.only().ok())
 }
 
 /// Completion for `update`'s ref positional: the resolved submodule's refs.
@@ -98,12 +102,16 @@ fn update_target_candidates() -> Vec<CompletionCandidate> {
     let Ok(root) = git::repo_root() else {
         return Vec::new();
     };
-    let mut out: Vec<CompletionCandidate> = config::load_all(&root)
+    let Ok(cfg) = config::Config::load(&root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<CompletionCandidate> = cfg
+        .all()
         .unwrap_or_default()
         .into_iter()
         .map(|sm| CompletionCandidate::new(sm.path).help(Some(sm.url.into())))
         .collect();
-    if let Ok(sm) = config::only(&root) {
+    if let Ok(sm) = cfg.only() {
         out.extend(
             refs_for(&root, &sm)
                 .into_iter()

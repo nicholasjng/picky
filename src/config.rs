@@ -79,126 +79,206 @@ pub fn check_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn get(root: &Path, key: &str) -> Result<Option<String>> {
-    git::capture_opt(root, &["config", "-f", FILE, "--get", key])
+/// `.gitmodules` parsed once, in full.
+///
+/// Every lookup used to be its own `git config --get`, so building the
+/// submodule list cost roughly nine `git` spawns per submodule plus one to
+/// enumerate them — paid on every command, and on every TAB press through the
+/// completion candidates. One `--list` covers the whole file instead.
+#[derive(Debug, Clone, Default)]
+pub struct Config {
+    /// `(key, value)` in file order, duplicates kept: `picky.<name>.sparse` is
+    /// multivalued, and git resolves a single-valued key to the *last* entry.
+    entries: Vec<(String, String)>,
 }
 
-fn get_all(root: &Path, key: &str) -> Result<Vec<String>> {
-    match git::capture_opt(root, &["config", "-f", FILE, "--get-all", key])? {
-        Some(s) if !s.is_empty() => Ok(s.lines().map(str::to_string).collect()),
-        _ => Ok(Vec::new()),
+impl Config {
+    /// Read and parse `<root>/.gitmodules`. A missing file is an empty config,
+    /// matching the previous per-key behaviour (`--get` on an absent file just
+    /// reported the key as unset).
+    pub fn load(root: &Path) -> Result<Self> {
+        let out = git::capture_opt(root, &["config", "-f", FILE, "--list", "-z"])?;
+        Ok(out.as_deref().map(Self::parse).unwrap_or_default())
     }
+
+    /// Parse `git config --list -z`: NUL-separated entries, each `key\nvalue`,
+    /// or a bare `key` when it was set with no value.
+    ///
+    /// The `-z` form (rather than line-oriented `--list`) is what makes a value
+    /// containing a newline survive: a multi-line `sparse` pattern would
+    /// otherwise be read back as several separate patterns.
+    fn parse(out: &str) -> Self {
+        let entries = out
+            .split('\0')
+            .filter(|e| !e.is_empty())
+            .map(|entry| match entry.split_once('\n') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => (entry.to_string(), String::new()),
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// The value of a single-valued key: the last one set, as git resolves it.
+    fn get(&self, key: &str) -> Option<&str> {
+        let key = normalize_key(key);
+        self.entries
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Every value of a multivalued key, in file order.
+    fn get_all(&self, key: &str) -> Vec<String> {
+        let key = normalize_key(key);
+        self.entries
+            .iter()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    /// All `submodule.<name>` section names declared, in file order. A section
+    /// counts as a submodule only once it sets `path`.
+    pub fn names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for (key, _) in &self.entries {
+            if let Some(rest) = key.strip_prefix("submodule.")
+                && let Some(name) = rest.strip_suffix(".path")
+                && !names.iter().any(|n| n == name)
+            {
+                names.push(name.to_string());
+            }
+        }
+        names
+    }
+
+    /// All `<section>.<name>` subsection names, whichever keys they set
+    /// (unlike [`Config::names`], which recognizes a submodule by its `.path`
+    /// key). Used by `picky doctor` to spot a `picky.<name>` section with no
+    /// matching `submodule.<name>`.
+    pub fn section_names(&self, section: &str) -> Vec<String> {
+        let prefix = format!("{section}.");
+        let mut names = Vec::new();
+        for (key, _) in &self.entries {
+            if let Some(rest) = key.strip_prefix(&prefix)
+                && let Some((name, _key)) = rest.rsplit_once('.')
+                && !names.iter().any(|n| n == name)
+            {
+                names.push(name.to_string());
+            }
+        }
+        names
+    }
+
+    /// One submodule's full configuration: git's keys from
+    /// `submodule.<name>.*`, picky's from `picky.<name>.*`.
+    pub fn submodule(&self, name: &str) -> Result<Submodule> {
+        let sub = |k: &str| format!("submodule.{name}.{k}");
+        let own = |k: &str| format!("picky.{name}.{k}");
+        Ok(Submodule {
+            name: name.to_string(),
+            path: self
+                .get(&sub("path"))
+                .map_or_else(|| name.to_string(), str::to_string),
+            url: self.get(&sub("url")).unwrap_or_default().to_string(),
+            branch: self.get(&sub("branch")).map(str::to_string),
+            shallow: self.get(&sub("shallow")) == Some("true"),
+            sparse: self.get_all(&own("sparse")),
+            depth: self
+                .get(&own("depth"))
+                .map(|s| {
+                    s.parse().with_context(|| {
+                        format!("picky.{name}.depth is not a non-negative integer: '{s}'")
+                    })
+                })
+                .transpose()?,
+            filter: self.get(&own("filter")).map(str::to_string),
+            patches: self.get(&own("patches")).map(str::to_string),
+            post_update: self.get(&own("postUpdate")).map(str::to_string),
+        })
+    }
+
+    /// Every declared submodule, in file order.
+    pub fn all(&self) -> Result<Vec<Submodule>> {
+        self.names().iter().map(|n| self.submodule(n)).collect()
+    }
+
+    /// The submodule whose section name or `path` matches `needle`.
+    pub fn find(&self, needle: &str) -> Result<Submodule> {
+        for name in self.names() {
+            let sm = self.submodule(&name)?;
+            if sm.name == needle || sm.path == needle {
+                return Ok(sm);
+            }
+        }
+        bail!("no submodule matching '{needle}' in .gitmodules");
+    }
+
+    /// The lone submodule, erroring if there is not exactly one (used when a
+    /// command's path argument is omitted).
+    pub fn only(&self) -> Result<Submodule> {
+        let mut all = self.all()?;
+        match all.len() {
+            1 => Ok(all.remove(0)),
+            0 => bail!("no submodules declared in .gitmodules"),
+            _ => bail!("multiple submodules declared, specify a path"),
+        }
+    }
+}
+
+/// Render a lookup key the way `git config --list` renders one: section and
+/// variable lowercased, the subsection between them left verbatim.
+///
+/// The subsection is the only case-sensitive part of a git config key, so
+/// `picky.<name>.postUpdate` is listed back as `picky.<name>.postupdate` while
+/// `<name>` keeps its case. Comparing against the un-normalized key silently
+/// found nothing for every mixed-case variable picky defines.
+fn normalize_key(key: &str) -> String {
+    let (Some(first), Some(last)) = (key.find('.'), key.rfind('.')) else {
+        return key.to_ascii_lowercase();
+    };
+    if first == last {
+        // `section.variable`, no subsection: both halves are case-insensitive.
+        return key.to_ascii_lowercase();
+    }
+    format!(
+        "{}{}{}",
+        key[..first].to_ascii_lowercase(),
+        &key[first..=last],
+        key[last + 1..].to_ascii_lowercase()
+    )
 }
 
 /// All `submodule.<name>` section names declared in `.gitmodules`.
 pub fn names(root: &Path) -> Result<Vec<String>> {
-    let out = git::capture_opt(
-        root,
-        &[
-            "config",
-            "-f",
-            FILE,
-            "--name-only",
-            "--get-regexp",
-            r"^submodule\..*\.path$",
-        ],
-    )?;
-    let Some(out) = out else {
-        return Ok(Vec::new());
-    };
-    let mut names = Vec::new();
-    for line in out.lines() {
-        if let Some(rest) = line.strip_prefix("submodule.")
-            && let Some(name) = rest.strip_suffix(".path")
-        {
-            names.push(name.to_string());
-        }
-    }
-    Ok(names)
+    Ok(Config::load(root)?.names())
 }
 
-/// All `<section>.<name>` subsection names declared in `.gitmodules`,
-/// regardless of which specific keys they set (unlike [`names`], which only
-/// recognizes a submodule by its `.path` key). Used by `picky doctor` to spot
-/// a `picky.<name>` section with no matching `submodule.<name>`, or vice
-/// versa.
+/// All `<section>.<name>` subsection names declared in `.gitmodules`.
 pub fn section_names(root: &Path, section: &str) -> Result<Vec<String>> {
-    let out = git::capture_opt(
-        root,
-        &[
-            "config",
-            "-f",
-            FILE,
-            "--name-only",
-            "--get-regexp",
-            &format!(r"^{section}\..*\.[^.]+$"),
-        ],
-    )?;
-    let Some(out) = out else {
-        return Ok(Vec::new());
-    };
-    let prefix = format!("{section}.");
-    let mut names = std::collections::HashSet::new();
-    for line in out.lines() {
-        if let Some(rest) = line.strip_prefix(&prefix)
-            && let Some((name, _key)) = rest.rsplit_once('.')
-        {
-            names.insert(name.to_string());
-        }
-    }
-    Ok(names.into_iter().collect())
+    Ok(Config::load(root)?.section_names(section))
 }
 
-/// Read a single submodule's full configuration: git's keys from
-/// `submodule.<name>.*`, picky's keys from `picky.<name>.*`.
+/// Read a single submodule's full configuration.
 pub fn load(root: &Path, name: &str) -> Result<Submodule> {
-    let sub = |k: &str| format!("submodule.{name}.{k}");
-    let own = |k: &str| format!("picky.{name}.{k}");
-    Ok(Submodule {
-        name: name.to_string(),
-        path: get(root, &sub("path"))?.unwrap_or_else(|| name.to_string()),
-        url: get(root, &sub("url"))?.unwrap_or_default(),
-        branch: get(root, &sub("branch"))?,
-        shallow: get(root, &sub("shallow"))?.as_deref() == Some("true"),
-        sparse: get_all(root, &own("sparse"))?,
-        depth: get(root, &own("depth"))?
-            .map(|s| {
-                s.parse().with_context(|| {
-                    format!("picky.{name}.depth is not a non-negative integer: '{s}'")
-                })
-            })
-            .transpose()?,
-        filter: get(root, &own("filter"))?,
-        patches: get(root, &own("patches"))?,
-        post_update: get(root, &own("postUpdate"))?,
-    })
+    Config::load(root)?.submodule(name)
 }
 
 /// Every submodule declared in `.gitmodules`.
 pub fn load_all(root: &Path) -> Result<Vec<Submodule>> {
-    names(root)?.iter().map(|n| load(root, n)).collect()
+    Config::load(root)?.all()
 }
 
 /// Find the submodule whose section name or `path` matches `needle`.
 pub fn find(root: &Path, needle: &str) -> Result<Submodule> {
-    for name in names(root)? {
-        let sm = load(root, &name)?;
-        if sm.name == needle || sm.path == needle {
-            return Ok(sm);
-        }
-    }
-    bail!("no submodule matching '{needle}' in .gitmodules");
+    Config::load(root)?.find(needle)
 }
 
-/// The lone submodule, erroring if there is not exactly one (used when a
-/// command's path argument is omitted).
+/// The lone submodule, erroring if there is not exactly one.
 pub fn only(root: &Path) -> Result<Submodule> {
-    let mut all = load_all(root)?;
-    match all.len() {
-        1 => Ok(all.remove(0)),
-        0 => bail!("no submodules declared in .gitmodules"),
-        _ => bail!("multiple submodules declared, specify a path"),
-    }
+    Config::load(root)?.only()
 }
 
 /// Replace the multivalued `picky.<name>.sparse` list for a submodule. Clears
@@ -280,7 +360,86 @@ pub fn remove(root: &Path, name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::check_path;
+    use super::{Config, check_path, normalize_key};
+
+    /// `git config --list -z`: NUL-separated entries of `key\nvalue`.
+    fn cfg(entries: &[&str]) -> Config {
+        Config::parse(&entries.join("\0"))
+    }
+
+    #[test]
+    fn parse_reads_keys_values_and_multivalues() {
+        let c = cfg(&[
+            "submodule.ext/dep.path\next/dep",
+            "submodule.ext/dep.url\nhttps://example.com/x.git",
+            "picky.ext/dep.sparse\n/src/*",
+            "picky.ext/dep.sparse\n/docs/*",
+        ]);
+        assert_eq!(c.names(), vec!["ext/dep"]);
+        let sm = c.submodule("ext/dep").unwrap();
+        assert_eq!(sm.path, "ext/dep");
+        assert_eq!(sm.url, "https://example.com/x.git");
+        assert_eq!(sm.sparse, vec!["/src/*", "/docs/*"]);
+    }
+
+    #[test]
+    fn single_valued_key_resolves_to_the_last_entry() {
+        // git's own `--get` semantics for a key set twice.
+        let c = cfg(&["submodule.a.path\nfirst", "submodule.a.path\nsecond"]);
+        let sm = c.submodule("a").unwrap();
+        assert_eq!(sm.path, "second");
+        assert_eq!(
+            c.names(),
+            vec!["a"],
+            "a repeated key is still one submodule"
+        );
+    }
+
+    #[test]
+    fn a_value_containing_a_newline_survives() {
+        // The reason for `-z`: line-oriented `--list` would read this back as
+        // two separate patterns.
+        let c = cfg(&["picky.a.sparse\nmulti\nline"]);
+        let sm = c.submodule("a").unwrap();
+        assert_eq!(sm.sparse, vec!["multi\nline"]);
+    }
+
+    #[test]
+    fn valueless_key_parses_as_empty() {
+        let c = cfg(&["picky.a.bare", "submodule.a.path\na"]);
+        assert_eq!(c.submodule("a").unwrap().path, "a");
+    }
+
+    #[test]
+    fn lookups_match_gits_key_case_folding() {
+        // `--list` lowercases section and variable but preserves subsection.
+        let c = cfg(&["picky.Ext/Dep.postupdate\nmake"]);
+        assert_eq!(
+            c.submodule("Ext/Dep").unwrap().post_update.as_deref(),
+            Some("make")
+        );
+        assert_eq!(
+            normalize_key("picky.Ext/Dep.postUpdate"),
+            "picky.Ext/Dep.postupdate"
+        );
+        assert_eq!(normalize_key("Core.SparseCheckout"), "core.sparsecheckout");
+    }
+
+    #[test]
+    fn an_empty_config_declares_nothing() {
+        let c = Config::parse("");
+        assert!(c.names().is_empty());
+        assert!(c.all().unwrap().is_empty());
+        assert!(c.only().is_err());
+        assert!(c.find("nope").is_err());
+    }
+
+    #[test]
+    fn a_malformed_depth_is_reported_not_ignored() {
+        let c = cfg(&["submodule.a.path\na", "picky.a.depth\nabc"]);
+        let err = c.submodule("a").unwrap_err().to_string();
+        assert!(err.contains("depth"), "got: {err}");
+    }
 
     #[test]
     fn check_path_accepts_paths_inside_the_superproject() {

@@ -14,7 +14,8 @@ use crate::console::Console;
 use crate::git;
 
 pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
-    let declared = config::load_all(root)?;
+    let cfg = config::Config::load(root)?;
+    let declared = cfg.all()?;
     let declared_paths: HashSet<&str> = declared.iter().map(|sm| sm.path.as_str()).collect();
     let mut issues = 0usize;
 
@@ -59,10 +60,8 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
         }
     }
 
-    let sub_names: HashSet<String> = config::section_names(root, "submodule")?
-        .into_iter()
-        .collect();
-    let picky_names: HashSet<String> = config::section_names(root, "picky")?.into_iter().collect();
+    let sub_names: HashSet<String> = cfg.section_names("submodule").into_iter().collect();
+    let picky_names: HashSet<String> = cfg.section_names("picky").into_iter().collect();
     for name in picky_names.difference(&sub_names) {
         con.warn(format!(
             "picky.{name} section in .gitmodules has no matching submodule.{name} section, \

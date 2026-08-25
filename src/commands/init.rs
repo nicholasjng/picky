@@ -9,13 +9,11 @@ use crate::console::Console;
 use crate::{git, hook, sparse};
 
 pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
+    let cfg = config::Config::load(root)?;
     let targets: Vec<Submodule> = if paths.is_empty() {
-        config::load_all(root)?
+        cfg.all()?
     } else {
-        paths
-            .iter()
-            .map(|p| config::find(root, p))
-            .collect::<Result<_>>()?
+        paths.iter().map(|p| cfg.find(p)).collect::<Result<_>>()?
     };
 
     if targets.is_empty() {
