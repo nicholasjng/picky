@@ -851,6 +851,46 @@ fn patch_stack_applies_and_broken_patch_is_fatal() {
     );
 }
 
+/// The dirty-tree warning must fire on a real unexported edit and stay quiet
+/// otherwise. Applying the patch stack is itself what makes the tree dirty, so
+/// a plain `status --porcelain` check warned on every run after the first.
+#[test]
+fn update_warns_only_about_changes_beyond_the_patch_stack() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], Some("patches"));
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    write(
+        &sup.join("patches/0001-good.patch"),
+        "--- a/src/c.txt\n+++ b/src/c.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+line2-patched\n line3\n",
+    );
+
+    let warned = |out: &Output| {
+        String::from_utf8_lossy(&out.stderr).contains("changes beyond its patch stack")
+    };
+
+    // First run applies the patch and leaves the tree dirty by design.
+    let out = picky(&sup, &["update"]);
+    assert!(out.status.success());
+    // Second run sees exactly that same dirt: not a user edit, so no warning.
+    let out = picky(&sup, &["update"]);
+    assert!(out.status.success());
+    assert!(!warned(&out), "patch-stack dirt must not warn");
+
+    // An edit inside a file the patch stack already touches must still warn:
+    // the status line is unchanged, only the content differs.
+    let c = dep.join("src/c.txt");
+    let body = std::fs::read_to_string(&c).unwrap();
+    write(&c, &format!("{body}hand-edit\n"));
+    let out = picky(&sup, &["update"]);
+    assert!(out.status.success());
+    assert!(warned(&out), "an unexported edit must warn");
+
+    // Settled again.
+    let out = picky(&sup, &["update"]);
+    assert!(out.status.success());
+    assert!(!warned(&out), "should be quiet once reset");
+}
+
 /// A path that is a tracked directory rather than a submodule gitlink must be
 /// named as such. `ls-files -s <dir>` lists every file under it, so taking the
 /// first row handed back a *blob* SHA that failed far away inside git as

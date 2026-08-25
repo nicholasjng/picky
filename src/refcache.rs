@@ -39,17 +39,7 @@ fn cache_dir() -> Option<PathBuf> {
 }
 
 fn cache_file(url: &str) -> Option<PathBuf> {
-    Some(cache_dir()?.join(fnv1a(url)))
-}
-
-/// FNV-1a 64-bit of the URL as a stable filename, avoids a hashing crate.
-fn fnv1a(s: &str) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{h:016x}")
+    Some(cache_dir()?.join(crate::hash::fnv1a(url)))
 }
 
 /// Read the cached ref list for `url`, if any.
@@ -201,12 +191,5 @@ mod tests {
                 ("v1.6.3".to_string(), "cafef00d".to_string()),
             ]
         );
-    }
-
-    #[test]
-    fn fnv_is_stable_and_hex() {
-        assert_eq!(fnv1a("https://example.com/x.git").len(), 16);
-        assert_eq!(fnv1a("a"), fnv1a("a"));
-        assert_ne!(fnv1a("a"), fnv1a("b"));
     }
 }

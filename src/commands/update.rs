@@ -83,9 +83,17 @@ fn update_one(
 
     // `checkout -f` below discards the working tree; warn if there are changes
     // not accounted for by patches/, so an unexported edit isn't lost silently.
-    if !git::capture(&wt, &["status", "--porcelain"])?.is_empty() {
+    //
+    // "Dirty" alone can't mean that: applying the patch stack *is* what makes
+    // the tree dirty, so a plain `status --porcelain` check fired on every run
+    // after the first and trained the user to ignore it. Compare against the
+    // state picky itself left behind last time instead.
+    let state = worktree_state(&wt)?;
+    if let Some(state) = &state
+        && recorded_state(root, &sm)?.as_deref() != Some(state.as_str())
+    {
         con.warn(format!(
-            "{} working tree is dirty; resetting to target + patches",
+            "{} has changes beyond its patch stack; resetting to target + patches",
             sm.path
         ));
     }
@@ -178,6 +186,10 @@ fn update_one(
 
     hook::run_post_update(root, &sm, con)?;
 
+    // Remember what picky left behind, so the next run can tell its own patch
+    // stack apart from a genuine unexported edit.
+    record_state(root, &sm, worktree_state(&wt)?.as_deref())?;
+
     if bump {
         // Record the moved pin in the superproject index.
         git::run(root, &["add", &sm.path])?;
@@ -210,4 +222,42 @@ fn update_one(
         ));
     }
     Ok(())
+}
+
+/// A fingerprint of the submodule's working-tree deviation from `HEAD`, or
+/// `None` when it is clean. Covers tracked modifications (`diff HEAD`) *and*
+/// untracked/staged entries (`status --porcelain`): a patch that only edits a
+/// file already listed as modified would not change the status line on its
+/// own, so the diff text has to be part of it.
+fn worktree_state(wt: &Path) -> Result<Option<String>> {
+    let status = git::capture(wt, &["status", "--porcelain"])?;
+    if status.is_empty() {
+        return Ok(None);
+    }
+    let diff = git::capture(wt, &["diff", "HEAD"])?;
+    Ok(Some(crate::hash::fnv1a(&format!("{status}\0{diff}"))))
+}
+
+/// The key holding the last state picky left in this submodule. Local config
+/// (`.git/config`), never `.gitmodules`: it describes one checkout on one
+/// machine, not the declaration that travels with the repo.
+fn state_key(sm: &Submodule) -> String {
+    format!("picky.{}.lastWorktreeState", sm.name)
+}
+
+fn recorded_state(root: &Path, sm: &Submodule) -> Result<Option<String>> {
+    git::capture_opt(root, &["config", "--get", &state_key(sm)])
+}
+
+fn record_state(root: &Path, sm: &Submodule, state: Option<&str>) -> Result<()> {
+    let key = state_key(sm);
+    match state {
+        Some(s) => git::run(root, &["config", &key, s]),
+        // A clean tree records nothing, so a later edit to a patch-free
+        // submodule still warns.
+        None => {
+            let _ = git::ok(root, &["config", "--unset", &key]);
+            Ok(())
+        }
+    }
 }

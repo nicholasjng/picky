@@ -36,6 +36,7 @@ pub mod commands;
 pub mod config;
 pub mod console;
 pub mod git;
+pub mod hash;
 pub mod hook;
 pub mod patch;
 pub mod refcache;
