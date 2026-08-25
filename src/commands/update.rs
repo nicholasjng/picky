@@ -22,6 +22,8 @@ pub fn run(
     con: &Console,
 ) -> Result<()> {
     if all {
+        // Not redundant with clap's `conflicts_with_all`: `picky::update` is a
+        // public library entry point that never goes through the parser.
         if arg1.is_some() || arg2.is_some() {
             bail!(
                 "--all refreshes every submodule at its current pin and can't be combined with a path or ref"

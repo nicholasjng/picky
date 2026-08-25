@@ -56,14 +56,13 @@ pub fn run(
     sparse::checkout(root, &sm, "FETCH_HEAD", con)?;
     hook::run_post_update(root, &sm, con)?;
 
-    // Only now record + stage the declaration. Suppress git's "embedded git
-    // repository" hint: a gitlink is exactly what we want.
+    // Only now record + stage the declaration. `--no-warn-embedded-repo`
+    // rather than `-c advice.addEmbeddedRepo=false`: the advice setting drops
+    // the follow-up hint but still prints the "adding embedded git repository"
+    // warning itself, and a gitlink is exactly what we want here.
     config::write(root, &sm)?;
     git::run(root, &["add", ".gitmodules"])?;
-    git::run(
-        root,
-        &["-c", "advice.addEmbeddedRepo=false", "add", &sm.path],
-    )?;
+    git::run(root, &["add", "--no-warn-embedded-repo", "--", &sm.path])?;
 
     let sha = git::capture(&root.join(&sm.path), &["rev-parse", "HEAD"])?;
     let short = sha.get(..8).unwrap_or(&sha);

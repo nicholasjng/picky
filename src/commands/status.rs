@@ -59,10 +59,13 @@ pub fn run(root: &Path, paths: &[String], json: bool, con: &Console) -> Result<(
         return Ok(());
     }
 
-    let mut widths = HEADERS.map(str::len);
+    // Char counts, not `len()`: `{:<width$}` pads by chars, so a byte width
+    // over-pads any cell holding a multi-byte character (the `stale→` arrow).
+    let chars = |s: &str| s.chars().count();
+    let mut widths = HEADERS.map(chars);
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.len());
+            widths[i] = widths[i].max(chars(cell));
         }
     }
 

@@ -33,7 +33,11 @@ pub fn run_post_update(root: &Path, sm: &Submodule, con: &Console) -> Result<()>
     };
 
     let wt = root.join(&sm.path);
-    let sha = git::capture(&wt, &["rev-parse", "HEAD"]).unwrap_or_default();
+    // Not `unwrap_or_default()`: an empty SHA would silently degrade the trust
+    // pin to the command text alone, which is exactly the weaker check the SHA
+    // half exists to close.
+    let sha = git::capture(&wt, &["rev-parse", "HEAD"])
+        .with_context(|| format!("resolving HEAD in {} to pin hook trust", sm.path))?;
 
     ensure_trusted(root, sm, cmd, &sha, con)?;
 

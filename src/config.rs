@@ -3,7 +3,7 @@
 //! `shallow`); picky's own options live in a parallel `picky.<name>` section
 //! that stock git ignores, joined by the shared subsection name.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 use crate::git;
@@ -161,7 +161,13 @@ pub fn load(root: &Path, name: &str) -> Result<Submodule> {
         branch: get(root, &sub("branch"))?,
         shallow: get(root, &sub("shallow"))?.as_deref() == Some("true"),
         sparse: get_all(root, &own("sparse"))?,
-        depth: get(root, &own("depth"))?.and_then(|s| s.parse().ok()),
+        depth: get(root, &own("depth"))?
+            .map(|s| {
+                s.parse().with_context(|| {
+                    format!("picky.{name}.depth is not a non-negative integer: '{s}'")
+                })
+            })
+            .transpose()?,
         filter: get(root, &own("filter"))?,
         patches: get(root, &own("patches"))?,
         post_update: get(root, &own("postUpdate"))?,

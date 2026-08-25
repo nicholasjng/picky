@@ -42,8 +42,12 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
         }
     }
 
+    // Ask git rather than assuming `.git/modules`, matching `sparse::gitdir`:
+    // the two disagree under a linked worktree or an explicit `GIT_DIR`.
+    let modules = git::capture(root, &["rev-parse", "--git-path", "modules"])
+        .map_or_else(|_| root.join(".git/modules"), |rel| root.join(rel));
     let mut gitdirs = Vec::new();
-    find_gitdirs(&root.join(".git/modules"), Path::new(""), &mut gitdirs);
+    find_gitdirs(&modules, Path::new(""), &mut gitdirs);
     for rel in &gitdirs {
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         if !declared_paths.contains(rel_str.as_str()) {

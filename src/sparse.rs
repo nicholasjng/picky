@@ -144,11 +144,11 @@ pub fn ensure_commit(root: &Path, sm: &Submodule, committish: &str, con: &Consol
         return Ok(());
     }
     con.step(format!("Fetching {committish} (shallow, blobless)"));
-    fetch(&wt, sm, committish, con)
+    fetch(&wt, sm, committish)
 }
 
 /// `git fetch` honoring the submodule's filter and depth.
-fn fetch(wt: &Path, sm: &Submodule, refspec: &str, _con: &Console) -> Result<()> {
+fn fetch(wt: &Path, sm: &Submodule, refspec: &str) -> Result<()> {
     let filter = sm.effective_filter().map(|f| format!("--filter={f}"));
     let depth = sm.effective_depth().map(|d| format!("--depth={d}"));
     let mut args = vec!["fetch", "-q"];
@@ -168,7 +168,7 @@ fn fetch(wt: &Path, sm: &Submodule, refspec: &str, _con: &Console) -> Result<()>
 pub fn fetch_ref(root: &Path, sm: &Submodule, refspec: &str, con: &Console) -> Result<()> {
     let wt = root.join(&sm.path);
     con.step(format!("Fetching {refspec} (shallow, blobless)"));
-    fetch(&wt, sm, refspec, con)
+    fetch(&wt, sm, refspec)
 }
 
 /// `checkout -f --detach` then trim any out-of-sparse paths a pre-existing full
