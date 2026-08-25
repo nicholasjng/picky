@@ -2,7 +2,7 @@
 //! sparse-checkout configuration, the reusable core of `init-duckdb.sh`. Kept
 //! idempotent so any prior state converges to the same checkout.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,13 +12,35 @@ use crate::git;
 
 /// The gitlink revision the superproject pins `path` to.
 pub fn pinned_sha(root: &Path, path: &str) -> Result<String> {
-    let out = git::capture(root, &["ls-files", "-s", path])?;
+    let out = git::capture(root, &["ls-files", "-s", "--", path])?;
     // `<mode> <sha> <stage>\t<path>`; `split_whitespace` also splits the tab.
-    out.split_whitespace()
-        .nth(1)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("no gitlink for '{path}' in the index"))
+    //
+    // Match the gitlink mode explicitly rather than trusting the first row: for
+    // a path that is a plain tracked directory instead of a submodule,
+    // `ls-files` lists every file *under* it, and taking the first row hands
+    // back a blob SHA that then fails far away as "git upload-pack: not our
+    // ref <blob>".
+    let mut tracked = false;
+    for line in out.lines() {
+        tracked = true;
+        let mut parts = line.split_whitespace();
+        let (Some(mode), Some(sha)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if mode == GITLINK_MODE {
+            return Ok(sha.to_string());
+        }
+    }
+    if tracked {
+        bail!(
+            "'{path}' is tracked but is not a submodule gitlink; the superproject has no commit pinned there"
+        );
+    }
+    bail!("no gitlink for '{path}' in the index")
 }
+
+/// The index mode `git` records a submodule gitlink under.
+const GITLINK_MODE: &str = "160000";
 
 /// Absolute git dir where `git submodule` expects this submodule's repository:
 /// `<root>/.git/modules/<path>`.
@@ -99,8 +121,7 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
 ///   stay missing from a checkout that now claims to be full.
 fn set_sparse_state(wt: &Path, sm: &Submodule) -> Result<()> {
     if sm.sparse.is_empty() {
-        return git::run(wt, &["sparse-checkout", "disable"])
-            .context("disabling sparse checkout");
+        return git::run(wt, &["sparse-checkout", "disable"]).context("disabling sparse checkout");
     }
     // `--skip-checks` keeps git from second-guessing non-cone patterns (it
     // warns about leading `/` and `*`, which is exactly what these are).

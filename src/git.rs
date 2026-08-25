@@ -56,6 +56,22 @@ pub fn capture_opt(dir: &Path, args: &[&str]) -> Result<Option<String>> {
     }
 }
 
+/// Run `git <args>` in `dir`, returning `Ok(None)` on success and
+/// `Ok(Some(stderr))` on a clean failure. For commands whose failure *text* is
+/// the point (`git apply`), where [`ok`] would throw away the one explanation
+/// the user needs.
+pub fn run_or_stderr(dir: &Path, args: &[&str]) -> Result<Option<String>> {
+    let out = base(dir, args)
+        .output()
+        .with_context(|| format!("failed to spawn `git {}`", args.join(" ")))?;
+    if out.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+    ))
+}
+
 /// Run `git <args>` silently, returning whether it succeeded. For predicate
 /// queries like `cat-file -e`, `remote get-url`, `rev-parse --verify`.
 pub fn ok(dir: &Path, args: &[&str]) -> Result<bool> {

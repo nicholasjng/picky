@@ -840,6 +840,56 @@ fn patch_stack_applies_and_broken_patch_is_fatal() {
     );
     let out = picky(&sup, &["update"]);
     assert!(!out.status.success(), "broken patch should fail");
+    // Git's own explanation must reach the user: a patch can fail because its
+    // context drifted *or* because its target is gone, and only this text
+    // tells them apart. It used to be discarded, leaving only advice to
+    // resolve conflict markers that may not exist.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error: patch failed") || stderr.contains("does not exist in index"),
+        "git's reason should be surfaced, got:\n{stderr}"
+    );
+}
+
+/// A path that is a tracked directory rather than a submodule gitlink must be
+/// named as such. `ls-files -s <dir>` lists every file under it, so taking the
+/// first row handed back a *blob* SHA that failed far away inside git as
+/// "upload-pack: not our ref".
+#[test]
+fn init_rejects_a_path_that_is_not_a_gitlink() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    write(&sup.join("vendor/thing/f.txt"), "hi\n");
+    git(&sup, &["add", "-A"]);
+    git(&sup, &["commit", "-qm", "plain dir"]);
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.vendor/thing.path",
+            "vendor/thing",
+        ],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.vendor/thing.url",
+            &url,
+        ],
+    );
+
+    let out = picky(&sup, &["init", "vendor/thing"]);
+    assert!(!out.status.success(), "a non-gitlink path should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not a submodule gitlink"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
