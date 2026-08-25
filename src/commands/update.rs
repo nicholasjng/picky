@@ -97,6 +97,8 @@ fn update_one(
         // so the only way to bound the object store across repeated bumps
         // is to throw the git dir away and refetch just the target commit.
         con.step("Rebuilding from scratch (--fresh)");
+        // Same guard as `remove`: this wipes the path recursively.
+        config::check_path(&sm.path)?;
         if wt.exists() {
             fs::remove_dir_all(&wt)?;
         }

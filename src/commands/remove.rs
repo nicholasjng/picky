@@ -40,6 +40,9 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
     for sm in &targets {
         con.heading(format!("removing submodule {}", sm.path));
 
+        // The path comes from committed `.gitmodules`, and everything below
+        // deletes it recursively; refuse one that escapes the superproject.
+        config::check_path(&sm.path)?;
         let worktree = root.join(&sm.path);
         if worktree.join(".git").exists()
             && let Ok(status) = git::capture(&worktree, &["status", "--porcelain"])

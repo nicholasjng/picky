@@ -375,6 +375,62 @@ fn add_failure_leaves_no_partial_gitmodules_state() {
     );
 }
 
+/// A path that escapes the superproject must be refused up front. It used to
+/// fail only at the final `git add`, by which point the clone was materialized
+/// outside the repo, the post-update hook had run there, and a staged
+/// `.gitmodules` entry was left behind.
+#[test]
+fn add_refuses_a_path_escaping_the_superproject() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+
+    let out = picky(&sup, &["add", &url, "../outside/escaped"]);
+    assert!(!out.status.success(), "escaping path should be refused");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("must stay inside the superproject"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !outside.join("escaped").exists(),
+        "nothing may be created outside the superproject"
+    );
+    assert!(
+        !sup.join(".gitmodules").exists(),
+        "no declaration may be written"
+    );
+}
+
+/// The same guard on the destructive side: a hostile `.gitmodules` must not
+/// aim `remove`'s recursive delete outside the repo.
+#[test]
+fn remove_refuses_a_path_escaping_the_superproject() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.evil.path", ".."],
+    );
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.evil.url", &url],
+    );
+
+    let out = picky(&sup, &["remove", "..", "--yes"]);
+    assert!(!out.status.success(), "escaping path should be refused");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("must stay inside the superproject"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        sup.exists() && tmp.path().exists(),
+        "nothing may be deleted"
+    );
+}
+
 #[test]
 fn add_rerun_clears_stale_optional_keys() {
     let (tmp, url, _v1) = remote_fixture();
@@ -1226,7 +1282,10 @@ fn post_update_hook_sha_bump_invalidates_trust() {
 
     // Re-approving at the new SHA lets it run again.
     let dep_head = git(&sup.join("ext/dep"), &["rev-parse", "HEAD"]);
-    git(&sup, &["config", "picky.ext/dep.trustedPostUpdateSha", &dep_head]);
+    git(
+        &sup,
+        &["config", "picky.ext/dep.trustedPostUpdateSha", &dep_head],
+    );
     let out = picky(&sup, &["update", "ext/dep", "v2"]);
     assert!(
         out.status.success(),

@@ -19,6 +19,13 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
     let mut issues = 0usize;
 
     for sm in &declared {
+        if let Err(e) = config::check_path(&sm.path) {
+            con.warn(format!(
+                "{e}; picky refuses to check out or delete this path"
+            ));
+            issues += 1;
+            continue;
+        }
         let dotgit = root.join(&sm.path).join(".git");
         if dotgit.exists() {
             let valid = dotgit

@@ -49,6 +49,36 @@ impl Submodule {
     }
 }
 
+/// Reject a submodule path that would escape the superproject.
+///
+/// `.gitmodules` is committed and travels with the repo, so in a hostile clone
+/// this string is attacker-controlled, and picky both materializes a checkout
+/// at it and deletes it recursively (`remove`, `update --fresh`). A path of
+/// `..`, `/abs`, or `.` would put those operations outside the repo root, `.`
+/// aiming a `remove_dir_all` straight at the superproject itself. Git itself
+/// refuses such names ("ignoring suspicious submodule name"); this is the same
+/// guard, applied before picky acts rather than after.
+pub fn check_path(path: &str) -> Result<()> {
+    use std::path::Component;
+    if path.is_empty() {
+        bail!("submodule path is empty");
+    }
+    let p = Path::new(path);
+    if !p
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        bail!(
+            "submodule path '{path}' must stay inside the superproject \
+             (no leading '/', no '..')"
+        );
+    }
+    if !p.components().any(|c| matches!(c, Component::Normal(_))) {
+        bail!("submodule path '{path}' does not name a directory inside the superproject");
+    }
+    Ok(())
+}
+
 fn get(root: &Path, key: &str) -> Result<Option<String>> {
     git::capture_opt(root, &["config", "-f", FILE, "--get", key])
 }
@@ -240,4 +270,24 @@ pub fn remove(root: &Path, name: &str) -> Result<()> {
         ],
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_path;
+
+    #[test]
+    fn check_path_accepts_paths_inside_the_superproject() {
+        for ok in ["ext/dep", "dep", "a/b/c", "./ext/dep"] {
+            assert!(check_path(ok).is_ok(), "{ok} should be accepted");
+        }
+    }
+
+    #[test]
+    fn check_path_rejects_escapes() {
+        // `..` escapes; `.` and "" would aim a recursive delete at the root.
+        for bad in ["..", "../outside", "ext/../..", "/abs/path", ".", ""] {
+            assert!(check_path(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
 }

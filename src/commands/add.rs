@@ -23,6 +23,11 @@ pub fn run(
     post_update: Option<String>,
     con: &Console,
 ) -> Result<()> {
+    // Before anything is created, fetched, or run: a path that escapes the
+    // superproject would otherwise materialize a full clone outside the repo
+    // and run the post-update hook there, only failing at the final `git add`.
+    config::check_path(&path)?;
+
     let sm = Submodule {
         name: name.unwrap_or_else(|| path.clone()),
         path,
