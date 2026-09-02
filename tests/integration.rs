@@ -1621,3 +1621,59 @@ fn refresh_fetches_a_pinned_commit_it_has_never_seen() {
     );
     assert_eq!(git(&dep, &["rev-parse", "HEAD"]), v2);
 }
+
+#[test]
+fn a_relative_gitmodules_url_resolves_like_git_does() {
+    // Git resolves `url = ../x` against the superproject's remote, not the
+    // submodule directory.
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    // The remote sits next to the superproject, so `../remote.git` names it
+    // from there — and something else from inside `ext/dep`.
+    let relative = "../remote.git";
+    git(
+        &sup,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{v1},ext/dep"),
+        ],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/dep.path",
+            "ext/dep",
+        ],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/dep.url",
+            relative,
+        ],
+    );
+    // Git needs a remote on the superproject to resolve against.
+    git(&sup, &["remote", "add", "origin", &url]);
+    git(&sup, &["add", ".gitmodules"]);
+    git(&sup, &["commit", "-qm", "sub"]);
+
+    let out = picky(&sup, &["init", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "relative url should resolve: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(git(&sup.join("ext/dep"), &["rev-parse", "HEAD"]), v1);
+    // `origin` inside the submodule is the resolved URL, not the raw `../…`.
+    let origin = git(&sup.join("ext/dep"), &["remote", "get-url", "origin"]);
+    assert!(!origin.starts_with("../"), "unresolved origin: {origin}");
+}

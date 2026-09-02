@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::{git, hook, sparse};
+use crate::{hook, sparse};
 
 pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     let cfg = config::Config::load(root)?;
@@ -23,10 +23,8 @@ pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
 
     for sm in &targets {
         con.heading(format!("submodule {}", sm.path));
-        // Register the submodule so `git status` tracks it; tolerate the case
-        // where it is not yet committed (picky configures the remote itself).
-        let _ = git::ok(root, &["submodule", "init", &sm.path]);
-
+        // Registration and relative-`url` resolution happen in
+        // `sparse::prepare`, below.
         let sha = sparse::pinned_sha(root, &sm.path)?;
         con.detail(format!("pinned at {sha}"));
         let gitdir = sparse::prepare(root, sm, con)?;

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::refcache;
+use crate::{refcache, sparse};
 
 pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     let cfg = config::Config::load(root)?;
@@ -18,13 +18,14 @@ pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
     };
 
     for sm in &subs {
-        con.step(format!("Fetching refs for {} from {}", sm.path, sm.url));
-        match refcache::ls_remote(&sm.url, None) {
+        let url = sparse::origin_url(root, sm).unwrap_or_else(|_| sm.url.clone());
+        con.step(format!("Fetching refs for {} from {url}", sm.path));
+        match refcache::ls_remote(&url, None) {
             Some(refs) => {
-                refcache::write(&sm.url, &refs)?;
+                refcache::write(&url, &refs)?;
                 con.success(format!("{}: cached {} ref(s)", sm.path, refs.len()));
             }
-            None => con.warn(format!("{}: could not reach {}", sm.path, sm.url)),
+            None => con.warn(format!("{}: could not reach {url}", sm.path)),
         }
     }
     Ok(())

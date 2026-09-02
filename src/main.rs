@@ -7,7 +7,7 @@ use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate, Shell}
 
 use picky::config::{self, Submodule};
 use picky::console::Console;
-use picky::{commands, git, refcache};
+use picky::{commands, git, refcache, sparse};
 
 /// Runtime completion candidates: the submodule paths declared in the current
 /// repo's `.gitmodules`. Errors (not in a repo, no `.gitmodules`) yield no
@@ -30,15 +30,18 @@ fn submodule_candidates() -> Vec<CompletionCandidate> {
 /// fresh cache instantly; stale cache instantly + a detached background
 /// refresh; no cache ⇒ one 2s-bounded `ls-remote`, decaying to local refs.
 fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
-    let pairs = match refcache::read(&sm.url) {
+    // The resolved URL: the key `refresh` and `status` use, and reachable
+    // when `.gitmodules` declares a relative one.
+    let url = sparse::origin_url(root, sm).unwrap_or_else(|_| sm.url.clone());
+    let pairs = match refcache::read(&url) {
         Some(c) if c.fresh => c.refs,
         Some(c) => {
             spawn_bg_refresh(&sm.path);
             c.refs
         }
-        None => match refcache::ls_remote(&sm.url, Some(Duration::from_secs(2))) {
+        None => match refcache::ls_remote(&url, Some(Duration::from_secs(2))) {
             Some(refs) => {
-                let _ = refcache::write(&sm.url, &refs);
+                let _ = refcache::write(&url, &refs);
                 refs
             }
             None => refcache::local_refs(root, &sm.path),

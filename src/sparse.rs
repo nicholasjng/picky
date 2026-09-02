@@ -52,12 +52,55 @@ pub fn gitdir(root: &Path, sm: &Submodule) -> Result<PathBuf> {
     Ok(root.join(rel))
 }
 
+/// Whether a `.gitmodules` URL is one git resolves against the superproject's
+/// own remote. Git treats exactly a leading `./` or `../` this way; anything
+/// else (a scheme, an scp-like host, an absolute path) is used verbatim.
+fn is_relative_url(url: &str) -> bool {
+    url.starts_with("./") || url.starts_with("../")
+}
+
+/// The URL to configure as the submodule's `origin`.
+///
+/// A relative `.gitmodules` URL (`url = ../sibling.git`) is resolved by git
+/// against the *superproject's* remote. picky configures `origin` from inside
+/// the submodule worktree, where the same string would resolve against
+/// `<root>/<path>/` instead, so it must be resolved first.
+///
+/// The resolution comes from git rather than from reimplementing its rules:
+/// `git submodule init` writes the resolved URL to the superproject's local
+/// config as `submodule.<name>.url`, and [`prepare`] runs it beforehand.
+///
+/// Read-only, so `status`/`refresh` can key the ref cache off the same URL a
+/// fetch uses. Falls back to the declared value when git has no resolved one
+/// (no gitlink in the index yet), leaving git to report the failure.
+pub fn origin_url(root: &Path, sm: &Submodule) -> Result<String> {
+    if !is_relative_url(&sm.url) {
+        return Ok(sm.url.clone());
+    }
+    let key = format!("submodule.{}.url", sm.name);
+    match git::capture_unless_unset(root, &["config", "--get", &key])? {
+        Some(url) if !is_relative_url(&url) && !url.is_empty() => Ok(url),
+        _ => Ok(sm.url.clone()),
+    }
+}
+
 /// Build the submodule git dir + worktree link (only if absent) and apply the
 /// partial-clone, promisor and sparse-checkout configuration. Returns the git
 /// dir. Idempotent.
 pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
     let gitdir = gitdir(root, sm)?;
     let worktree = root.join(&sm.path);
+
+    // Register the submodule so `git status` tracks it, and so git resolves a
+    // relative `url` into local config for [`origin_url`]. Tolerate failure:
+    // there is no gitlink to register during `add`, and picky configures the
+    // remote itself either way.
+    let _ = git::ok(root, &["submodule", "init", "--", &sm.path]);
+    if is_relative_url(&sm.url) {
+        // `init` leaves an already-set local url alone, so an edited relative
+        // url needs `sync` to re-resolve it from `.gitmodules`.
+        let _ = git::ok(root, &["submodule", "sync", "--", &sm.path]);
+    }
 
     // Create the git dir when the worktree has no usable repo. A plain `.git`
     // existence check is fooled by a *dangling* gitlink (git dir deleted, file
@@ -91,10 +134,11 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
 
     con.step("Configuring remote and sparse checkout");
     let wt = worktree.as_path();
+    let url = origin_url(root, sm)?;
     if git::ok(wt, &["remote", "get-url", "origin"])? {
-        git::run(wt, &["remote", "set-url", "origin", &sm.url])?;
+        git::run(wt, &["remote", "set-url", "origin", &url])?;
     } else {
-        git::run(wt, &["remote", "add", "origin", &sm.url])?;
+        git::run(wt, &["remote", "add", "origin", &url])?;
     }
     git::run(wt, &["config", "extensions.partialClone", "origin"])?;
     git::run(wt, &["config", "remote.origin.promisor", "true"])?;
@@ -204,4 +248,25 @@ pub fn worktree_size(root: &Path, sm: &Submodule) -> Option<String> {
         .split_whitespace()
         .next()
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_relative_url;
+
+    #[test]
+    fn only_dot_prefixed_urls_are_relative() {
+        for rel in ["./sibling.git", "../sibling.git", "../../up/x.git"] {
+            assert!(is_relative_url(rel), "{rel} should be relative");
+        }
+        for abs in [
+            "https://example.com/x.git",
+            "git@example.com:o/x.git",
+            "/srv/git/x.git",
+            "file:///srv/git/x.git",
+            ".hidden/x.git",
+        ] {
+            assert!(!is_relative_url(abs), "{abs} should not be relative");
+        }
+    }
 }

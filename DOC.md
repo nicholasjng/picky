@@ -112,7 +112,7 @@ options live in a parallel `picky.<name>` section that stock git ignores entirel
 | Key | Section | Meaning |
 |---|---|---|
 | `submodule.<name>.path`    | git   | checkout path within the superproject |
-| `submodule.<name>.url`     | git   | remote URL |
+| `submodule.<name>.url`     | git   | remote URL, absolute or `../`-relative |
 | `submodule.<name>.branch`  | git   | branch to track (used by `update <branch>`) |
 | `submodule.<name>.shallow` | git   | `true` ⇒ shallow fetch (depth 1 unless `depth` set) |
 | `picky.<name>.sparse`      | picky | **multivalued** non-cone pattern; absence ⇒ full checkout |
@@ -120,6 +120,11 @@ options live in a parallel `picky.<name>` section that stock git ignores entirel
 | `picky.<name>.filter`      | picky | partial-clone filter; default `blob:none`, `none` disables |
 | `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
 | `picky.<name>.postUpdate`  | picky | shell command run after each checkout (post-update hook) |
+
+A relative `url` (`../sibling.git`) is resolved against the *superproject's*
+remote, the way git resolves one — not against the submodule directory. picky
+takes that resolution from git rather than reimplementing its rules, so it
+needs a remote on the superproject, exactly as `git submodule init` does.
 
 The `picky.<name>` section holds **only** the options git doesn't understand;
 nothing is duplicated from the `submodule.<name>` section. The pin (gitlink SHA)

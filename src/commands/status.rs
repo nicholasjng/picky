@@ -94,7 +94,7 @@ fn row(root: &Path, sm: &Submodule) -> [String; 8] {
         .unwrap_or_else(|| "-".into());
 
     let branch = sm.branch.clone().unwrap_or_else(|| "-".into());
-    let upstream = upstream_status(sm, pin_full.as_deref());
+    let upstream = upstream_status(root, sm, pin_full.as_deref());
 
     let sparse = if sm.sparse.is_empty() {
         "off".into()
@@ -127,11 +127,13 @@ fn row(root: &Path, sm: &Submodule) -> [String; 8] {
 /// (populated by `picky refresh`; `status` itself is offline-only and never
 /// touches the network). `-` when no branch is tracked (a bare SHA/tag pin
 /// has no "latest" to compare against); `?` when there's no cache yet.
-fn upstream_status(sm: &Submodule, pin: Option<&str>) -> String {
+fn upstream_status(root: &Path, sm: &Submodule, pin: Option<&str>) -> String {
     let (Some(branch), Some(pin)) = (&sm.branch, pin) else {
         return "-".into();
     };
-    let Some(cached) = refcache::read(&sm.url) else {
+    // The resolved URL: the key `refresh` wrote under.
+    let url = sparse::origin_url(root, sm).unwrap_or_else(|_| sm.url.clone());
+    let Some(cached) = refcache::read(&url) else {
         return "?".into();
     };
     match cached.sha(branch) {
