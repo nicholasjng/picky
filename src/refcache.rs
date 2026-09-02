@@ -13,6 +13,15 @@ use std::time::{Duration, SystemTime};
 /// How long a cached ref list is considered fresh.
 pub const TTL: Duration = Duration::from_secs(3600);
 
+/// Bound on the `ls-remote` a TAB press may trigger. Short: nobody waits on a
+/// completion.
+pub const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Bound on the `ls-remote` an explicit `picky refresh` runs. Long enough for
+/// a cold remote, short enough that an unreachable host cannot hang the
+/// command — including the detached warm-up a stale-cache completion spawns.
+pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A cached ref list (`(name, sha)` pairs, bare, no `refs/heads/` or
 /// `refs/tags/` prefix) and whether it's still within [`TTL`].
 pub struct Cached {
@@ -96,7 +105,12 @@ pub fn ls_remote(url: &str, timeout: Option<Duration>) -> Option<Vec<(String, St
 
     // Drain stdout on a thread so a large ref list can't deadlock the pipe
     // while we poll for the timeout.
-    let mut stdout = child.stdout.take()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        // Reap the child on the way out.
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
         let _ = stdout.read_to_string(&mut s);

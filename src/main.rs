@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueHint};
@@ -28,7 +27,7 @@ fn submodule_candidates() -> Vec<CompletionCandidate> {
 
 /// Ref-name candidates for a submodule, hybrid-cached (see [`refcache`]):
 /// fresh cache instantly; stale cache instantly + a detached background
-/// refresh; no cache ⇒ one 2s-bounded `ls-remote`, decaying to local refs.
+/// refresh; no cache ⇒ one short-bounded `ls-remote`, decaying to local refs.
 fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
     // The resolved URL: the key `refresh` and `status` use, and reachable
     // when `.gitmodules` declares a relative one.
@@ -39,7 +38,7 @@ fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
             spawn_bg_refresh(&sm.path);
             c.refs
         }
-        None => match refcache::ls_remote(&url, Some(Duration::from_secs(2))) {
+        None => match refcache::ls_remote(&url, Some(refcache::COMPLETION_TIMEOUT)) {
             Some(refs) => {
                 let _ = refcache::write(&url, &refs);
                 refs

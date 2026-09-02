@@ -38,6 +38,7 @@ pub mod console;
 pub mod git;
 pub mod hash;
 pub mod hook;
+pub mod parallel;
 pub mod patch;
 pub mod refcache;
 pub mod sparse;
