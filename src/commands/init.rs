@@ -34,7 +34,7 @@ pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
         hook::run_post_update(root, sm, con)?;
 
         match sparse::worktree_size(root, sm) {
-            Some(size) => con.success(format!("{} ready ({size})", sm.path)),
+            Some(size) => con.success(format!("{} ready ({})", sm.path, sparse::human_size(size))),
             None => con.success(format!("{} ready", sm.path)),
         }
     }

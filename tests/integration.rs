@@ -1751,3 +1751,65 @@ fn add_refuses_to_check_out_over_unrelated_content() {
     assert!(picky(&sup, &["add", &url, "ext/dep"]).status.success());
     assert!(picky(&sup, &["add", &url, "ext/dep"]).status.success());
 }
+
+#[test]
+fn status_reports_the_object_store_separately_and_as_json_numbers() {
+    // The worktree's `.git` is a link file, so a walk of the checkout cannot
+    // see the object store; it is reported separately.
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let out = picky(&sup, &["status"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("STORE"), "no STORE column: {stdout}");
+
+    let out = picky(&sup, &["status", "--json"]);
+    let json = String::from_utf8_lossy(&out.stdout);
+    // Sizes are bare numbers, not `"77M"`, so a script can use them.
+    let size = json
+        .split(r#""size": "#)
+        .nth(1)
+        .and_then(|s| s.split(&[',', '}'][..]).next())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    assert!(
+        size.parse::<u64>().is_ok_and(|n| n > 0),
+        "size should be a positive number, got {size:?} in {json}"
+    );
+    let store = json
+        .split(r#""store": "#)
+        .nth(1)
+        .and_then(|s| s.split(&[',', '}'][..]).next())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    assert!(
+        store.parse::<u64>().is_ok_and(|n| n > 0),
+        "store should be a positive number, got {store:?} in {json}"
+    );
+    assert!(!json.contains(r#""size": ""#), "size is quoted: {json}");
+}
+
+#[test]
+fn status_sizes_are_exact_byte_counts() {
+    // Sizes come from a directory walk, so they are exact byte counts rather
+    // than 1 KiB blocks.
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    let json = String::from_utf8_lossy(&picky(&sup, &["status", "--json"]).stdout).to_string();
+    let field = |key: &str| -> u64 {
+        json.split(&format!(r#""{key}": "#))
+            .nth(1)
+            .and_then(|s| s.split(&[',', '}'][..]).next())
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    let (size, store) = (field("size"), field("store"));
+    assert!(size > 0 && store > 0, "{json}");
+    // A partial clone's object store outweighs a sparse working tree.
+    assert!(store > size, "store {store} should exceed worktree {size}");
+}

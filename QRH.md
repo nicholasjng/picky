@@ -181,13 +181,16 @@ blobs are lazily pulled from the promisor remote.
 
 **CONDITION** — A submodule is taking more disk than it should.
 
-1. `picky status` — read the `SIZE` column.
+1. `picky status` — read the `SIZE` column (the working tree).
 2. `picky sparse list -p <path>` — find the pattern pulling in the bulk.
 3. `picky sparse remove /that/dir/ -p <path>` — removes it and trims the tree.
 4. `git commit .gitmodules`
 
 **NOTE** — Removal is by *exact* pattern text, so metacharacters like
 `/extension/*.cmake` are safe to remove verbatim.
+
+**NOTE** — Sparse patterns don't shrink the `STORE` column; that's
+[5.2](#52-object-store-grew-after-repeated-bumps).
 
 ### 3.3 Go back to a full checkout
 
@@ -298,7 +301,8 @@ the default shallow fetch working.
 
 ### 5.2 Object store grew after repeated bumps
 
-**CONDITION** — `.git/modules/<path>` is far larger than the working tree.
+**CONDITION** — `picky status` shows a `STORE` far above `SIZE`: the object
+store in `.git/modules/<path>` outweighs the working tree.
 
 **CAUSE** — `git gc` can never reclaim a partial clone's old packs, so every
 bump adds to the store permanently.

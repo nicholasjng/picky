@@ -42,14 +42,20 @@ pub fn pinned_sha(root: &Path, path: &str) -> Result<String> {
 /// The index mode `git` records a submodule gitlink under.
 const GITLINK_MODE: &str = "160000";
 
+/// Absolute `.git/modules` directory, the parent of every submodule git dir.
+///
+/// Asked of git rather than assumed: the literal `.git/modules` is wrong under
+/// a linked worktree or an explicit `GIT_DIR`. Separate from [`gitdir`] so a
+/// caller measuring every submodule resolves it once.
+pub fn modules_dir(root: &Path) -> Result<PathBuf> {
+    let rel = git::capture(root, &["rev-parse", "--git-path", "modules"])?;
+    Ok(root.join(rel))
+}
+
 /// Absolute git dir where `git submodule` expects this submodule's repository:
 /// `<root>/.git/modules/<path>`.
 pub fn gitdir(root: &Path, sm: &Submodule) -> Result<PathBuf> {
-    let rel = git::capture(
-        root,
-        &["rev-parse", "--git-path", &format!("modules/{}", sm.path)],
-    )?;
-    Ok(root.join(rel))
+    Ok(modules_dir(root)?.join(&sm.path))
 }
 
 /// Whether a `.gitmodules` URL is one git resolves against the superproject's
@@ -233,26 +239,170 @@ pub fn checkout(root: &Path, sm: &Submodule, refish: &str, con: &Console) -> Res
     Ok(())
 }
 
-/// `du -sh`-style working-tree size, or `None` if unavailable.
-pub fn worktree_size(root: &Path, sm: &Submodule) -> Option<String> {
-    let path = root.join(&sm.path);
-    let out = std::process::Command::new("du")
-        .arg("-sh")
-        .arg(&path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
+/// Recursive disk usage of `path` in **bytes**, or `None` when it can't be
+/// read at all.
+///
+/// Hand-rolled rather than shelling out to `du -sk`: no external tool, byte
+/// resolution instead of 1 KiB blocks, and one less process spawn per
+/// `status` row.
+///
+/// Counts *allocated* blocks where the platform reports them (`st_blocks`),
+/// matching `du`; apparent length elsewhere. Symlinks are counted but never
+/// followed, so a link out of the tree neither inflates the total nor escapes
+/// it. Unlike `du`, a hardlinked file counts once per link.
+pub fn dir_size(path: &Path) -> Option<u64> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_dir() {
+        return Some(entry_size(&meta));
+    }
+    let mut total = entry_size(&meta);
+    // An explicit stack, so a deep tree costs heap rather than stack.
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        // An unreadable subdirectory contributes nothing rather than failing
+        // the whole measurement.
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // `DirEntry::metadata` does not traverse symlinks: this is the
+            // link's own size, and `is_dir` is false for a link to a directory.
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            total += entry_size(&meta);
+            if meta.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    Some(total)
+}
+
+/// One entry's contribution to [`dir_size`]: allocated blocks on unix,
+/// apparent length elsewhere.
+#[cfg(unix)]
+fn entry_size(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    // `st_blocks` is in 512-byte units, whatever the filesystem's block size.
+    meta.blocks() * 512
+}
+
+#[cfg(not(unix))]
+fn entry_size(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
+}
+
+/// Working-tree disk usage of a submodule, in bytes.
+pub fn worktree_size(root: &Path, sm: &Submodule) -> Option<u64> {
+    dir_size(&root.join(&sm.path))
+}
+
+/// Disk usage of the submodule's git dir — the partial clone's object store —
+/// in bytes.
+///
+/// Reported separately from [`worktree_size`], which cannot see it: the
+/// worktree's `.git` is a link file, not the repository. It is usually the
+/// larger half (a sparse duckdb checkout measures 77M of working tree over a
+/// 316M object store) and the half that grows without bound, since `git gc`
+/// can never reclaim a partial clone's old packs — the growth
+/// `picky update --fresh` resets.
+///
+/// Takes the `.git/modules` directory rather than resolving it per call, so a
+/// caller measuring every submodule resolves it once ([`modules_dir`]).
+pub fn store_size(modules: &Path, sm: &Submodule) -> Option<u64> {
+    let gitdir = modules.join(&sm.path);
+    if !gitdir.is_dir() {
         return None;
     }
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_string)
+    dir_size(&gitdir)
+}
+
+/// Render a byte count the way `du -h` does: `812K`, `77M`, `1.2G`.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match unit {
+        0 => format!("{bytes}B"),
+        // One decimal below 10 (`1.2G`), none above (`316M`), like `du -h`.
+        _ if value < 10.0 => format!("{value:.1}{}", UNITS[unit]),
+        _ => format!("{value:.0}{}", UNITS[unit]),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_relative_url;
+    use super::{dir_size, human_size, is_relative_url};
+
+    /// A throwaway directory, removed on drop.
+    struct TmpDir(std::path::PathBuf);
+    impl TmpDir {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("picky-sparse-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TmpDir(dir)
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn dir_size_walks_subdirectories() {
+        let tmp = TmpDir::new("walk");
+        std::fs::write(tmp.0.join("a.txt"), vec![b'x'; 4096]).unwrap();
+        std::fs::create_dir(tmp.0.join("sub")).unwrap();
+        std::fs::write(tmp.0.join("sub/b.txt"), vec![b'x'; 4096]).unwrap();
+
+        let size = dir_size(&tmp.0).unwrap();
+        assert!(
+            size >= 8192,
+            "should count both files across the nesting, got {size}"
+        );
+        // A missing path has no size at all, rather than zero.
+        assert_eq!(dir_size(&tmp.0.join("nope")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_size_does_not_follow_symlinks() {
+        let tmp = TmpDir::new("links");
+        let real = tmp.0.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("big.bin"), vec![b'x'; 256 * 1024]).unwrap();
+        let measured = dir_size(&real).unwrap();
+
+        // A tree whose only content is a link *to* `real` must not inherit
+        // `real`'s size — otherwise a link out of a submodule would inflate
+        // its reported footprint.
+        let linked = tmp.0.join("linked");
+        std::fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(&real, linked.join("ptr")).unwrap();
+        let via_link = dir_size(&linked).unwrap();
+        assert!(
+            via_link < measured,
+            "symlink was followed: {via_link} vs {measured}"
+        );
+    }
+
+    #[test]
+    fn human_size_matches_du_h_style() {
+        assert_eq!(human_size(0), "0B");
+        assert_eq!(human_size(999), "999B");
+        assert_eq!(human_size(1024), "1.0K");
+        assert_eq!(human_size(77 * 1024 * 1024), "77M");
+        assert_eq!(human_size(316 * 1024 * 1024), "316M");
+        assert_eq!(human_size(1024 * 1024 * 1024 + 1024 * 1024 * 200), "1.2G");
+    }
 
     #[test]
     fn only_dot_prefixed_urls_are_relative() {

@@ -15,10 +15,10 @@ cargo install --path .
 ```
 
 Make sure `~/.cargo/bin` is on your `PATH`. Requires a recent `git` (≥ 2.41 for
-`GIT_NO_LAZY_FETCH`) on `PATH` at runtime, plus a Unix-like shell environment
-(`sh` for the post-update hook, `du` for working-tree sizing in `status`/`add`):
-Linux, macOS, WSL, or Git Bash. Native Windows (cmd/PowerShell without WSL) is
-not supported.
+`GIT_NO_LAZY_FETCH`) on `PATH` at runtime, plus `sh` if a submodule declares a
+post-update hook. Tested on Linux, macOS, WSL and Git Bash. Native Windows
+(cmd/PowerShell without WSL) is untested: hooks need `sh`, and the ref cache
+needs `XDG_CACHE_HOME` or `HOME`.
 
 ## Commands
 
@@ -30,7 +30,7 @@ not supported.
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
 | `picky update --all`            | move every declared submodule onto its pinned commit + re-apply patches (no bump) |
 | `picky sparse <list/add/remove/set/clear>` | edit sparse patterns + reconcile |
-| `picky status [<path>…] [--json]` | table (or JSON) of pin, branch, upstream staleness, sparse, filter, size, patches |
+| `picky status [<path>…] [--json]` | table (or JSON) of pin, branch, upstream staleness, sparse, filter, worktree + object-store size, patches |
 | `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion and `status`'s upstream column) |
 | `picky doctor [--strict]`       | sanity-check submodule state against `.gitmodules` (diagnostic by default) |
 | `picky completions <shell>`     | print the eval-able dynamic-completion registration script |

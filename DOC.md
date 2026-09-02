@@ -312,13 +312,29 @@ patch stack already touches.
 
 ### `status`
 
+`status` reports two sizes: `SIZE` is the working tree, `STORE` is the
+submodule's git dir — the partial clone's object store. A `du` of the checkout
+cannot see the store, since the worktree's `.git` is a link *file* rather than
+the repository. It is usually the larger half — a sparse duckdb checkout
+measures 77M of working tree over a 316M object store — and the half that grows
+without bound, because `git gc` can never reclaim a partial clone's old packs.
+`STORE` is the number behind
+[QRH 5.2](QRH.md#52-object-store-grew-after-repeated-bumps), and the one
+`picky update --fresh` resets.
+
+Both come from a directory walk, so they are exact byte counts and need no
+external `du`. Allocated blocks are counted where the platform reports them,
+matching `du`'s totals; symlinks are counted but never followed.
+
 `status`'s `UPSTREAM` column compares the pin against the tracked branch's
 cached remote tip (`current`/`stale→<sha>`), or `-` when no branch is tracked
 (a bare SHA/tag pin has no "latest" to compare against). It's cache-only,
 `status` never hits the network, so run `picky refresh` first to populate or
 update it; a `?` means there's no cache yet. `picky status --json` emits the
 same fields as a JSON array (`[]` when there are no submodules) instead of the
-table, for scripting (hand-rolled, no `serde_json` dependency).
+table, for scripting (hand-rolled, no `serde_json` dependency). There `size`,
+`store` and `patches` are numbers — sizes in bytes, `null` when unavailable —
+rather than the table's `"77M"`/`"-"` strings.
 
 ### `sparse`
 

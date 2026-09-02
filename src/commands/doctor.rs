@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::console::Console;
-use crate::git;
+use crate::{git, sparse};
 
 pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
     let cfg = config::Config::load(root)?;
@@ -43,10 +43,9 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
         }
     }
 
-    // Ask git rather than assuming `.git/modules`, matching `sparse::gitdir`:
-    // the two disagree under a linked worktree or an explicit `GIT_DIR`.
-    let modules = git::capture(root, &["rev-parse", "--git-path", "modules"])
-        .map_or_else(|_| root.join(".git/modules"), |rel| root.join(rel));
+    // Ask git rather than assuming `.git/modules`: the two disagree under a
+    // linked worktree or an explicit `GIT_DIR`.
+    let modules = sparse::modules_dir(root).unwrap_or_else(|_| root.join(".git/modules"));
     let mut gitdirs = Vec::new();
     find_gitdirs(&modules, Path::new(""), &mut gitdirs);
     for rel in &gitdirs {

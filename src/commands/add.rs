@@ -83,7 +83,11 @@ pub fn run(
     let sha = git::capture(&root.join(&sm.path), &["rev-parse", "HEAD"])?;
     let short = sha.get(..8).unwrap_or(&sha);
     match sparse::worktree_size(root, &sm) {
-        Some(size) => con.success(format!("{} added at {short} ({size})", sm.path)),
+        Some(size) => con.success(format!(
+            "{} added at {short} ({})",
+            sm.path,
+            sparse::human_size(size)
+        )),
         None => con.success(format!("{} added at {short}", sm.path)),
     }
     con.plain("  staged .gitmodules + gitlink, commit them to record the submodule");
