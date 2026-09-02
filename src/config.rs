@@ -93,11 +93,18 @@ pub struct Config {
 }
 
 impl Config {
-    /// Read and parse `<root>/.gitmodules`. A missing file is an empty config,
-    /// matching the previous per-key behaviour (`--get` on an absent file just
-    /// reported the key as unset).
+    /// Read and parse `<root>/.gitmodules`.
+    ///
+    /// An absent file is an empty config. A file that is present but
+    /// unparseable is an error, not an empty config: read as "nothing
+    /// declared", a syntax error would be reported as `no submodules declared
+    /// in .gitmodules`, and `doctor --strict` would pass on a broken file.
     pub fn load(root: &Path) -> Result<Self> {
-        let out = git::capture_opt(root, &["config", "-f", FILE, "--list", "-z"])?;
+        if !root.join(FILE).exists() {
+            return Ok(Self::default());
+        }
+        let out = git::capture_unless_unset(root, &["config", "-f", FILE, "--list", "-z"])
+            .with_context(|| format!("reading {FILE}"))?;
         Ok(out.as_deref().map(Self::parse).unwrap_or_default())
     }
 

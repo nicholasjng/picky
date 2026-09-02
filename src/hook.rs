@@ -84,8 +84,10 @@ fn trust_sha_key(sm: &Submodule) -> String {
 fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, sha: &str, con: &Console) -> Result<()> {
     let key = trust_key(sm);
     let sha_key = trust_sha_key(sm);
-    let trusted_cmd = git::capture_opt(root, &["config", "--get", &key])?;
-    let trusted_sha = git::capture_opt(root, &["config", "--get", &sha_key])?;
+    // A git failure must surface rather than read as unset, which would
+    // re-prompt for approval on every run.
+    let trusted_cmd = git::capture_unless_unset(root, &["config", "--get", &key])?;
+    let trusted_sha = git::capture_unless_unset(root, &["config", "--get", &sha_key])?;
     if trusted_cmd.as_deref() == Some(cmd) && trusted_sha.as_deref() == Some(sha) {
         return Ok(());
     }

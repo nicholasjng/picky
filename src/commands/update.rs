@@ -249,7 +249,9 @@ fn state_key(sm: &Submodule) -> String {
 }
 
 fn recorded_state(root: &Path, sm: &Submodule) -> Result<Option<String>> {
-    git::capture_opt(root, &["config", "--get", &state_key(sm)])
+    // A git failure must surface rather than read as "nothing recorded", which
+    // would compare unequal and fire the warning below spuriously.
+    git::capture_unless_unset(root, &["config", "--get", &state_key(sm)])
 }
 
 fn record_state(root: &Path, sm: &Submodule, state: Option<&str>) -> Result<()> {

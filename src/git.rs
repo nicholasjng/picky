@@ -41,19 +41,31 @@ pub fn capture(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// Run `git <args>` in `dir`, returning `Some(stdout)` on success and `None`
-/// on a clean failure (e.g. `config --get` of a missing key). Spawn failures
-/// still bubble up.
-pub fn capture_opt(dir: &Path, args: &[&str]) -> Result<Option<String>> {
+/// only when git exits with `1` — its "nothing to report" code (`config --get`
+/// of a missing key, `config --list` of a file holding no entries). Any other
+/// non-zero exit is a real failure and surfaces as an error carrying stderr.
+///
+/// Distinguishing the two matters wherever absence is meaningful: read as
+/// "nothing found", a `.gitmodules` syntax error (exit 128) becomes an empty
+/// submodule list, and any other git failure becomes an unset trust key or an
+/// unrecorded worktree state.
+pub fn capture_unless_unset(dir: &Path, args: &[&str]) -> Result<Option<String>> {
     let out = base(dir, args)
         .output()
         .with_context(|| format!("failed to spawn `git {}`", args.join(" ")))?;
     if out.status.success() {
-        Ok(Some(
+        return Ok(Some(
             String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
-        ))
-    } else {
-        Ok(None)
+        ));
     }
+    if out.status.code() == Some(1) {
+        return Ok(None);
+    }
+    bail!(
+        "`git {}` failed:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr).trim_end()
+    )
 }
 
 /// Run `git <args>` in `dir`, returning `Ok(None)` on success and

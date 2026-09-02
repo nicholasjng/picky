@@ -1470,3 +1470,41 @@ fn doctor_strict_exits_nonzero_on_issues() {
         "without --strict the same issues should still just warn"
     );
 }
+
+#[test]
+fn an_unparseable_gitmodules_is_an_error_not_an_empty_config() {
+    // Read as "nothing declared", a syntax error would surface as `no
+    // submodules declared` and `doctor --strict` would pass on a broken file.
+    let (tmp, ..) = remote_fixture();
+    let sup = empty_super(&tmp);
+    // Unterminated section header.
+    write(
+        &sup.join(".gitmodules"),
+        "[submodule \"ext/dep\"\n\tpath = ext/dep\n",
+    );
+
+    for args in [
+        vec!["status"],
+        vec!["init"],
+        vec!["doctor"],
+        vec!["doctor", "--strict"],
+    ] {
+        let out = picky(&sup, &args);
+        assert!(
+            !out.status.success(),
+            "`picky {args:?}` should fail on an unparseable .gitmodules"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(".gitmodules"),
+            "`picky {args:?}` should name the file, got: {stderr}"
+        );
+    }
+
+    // An *absent* file is still an empty config, not an error.
+    std::fs::remove_file(sup.join(".gitmodules")).unwrap();
+    assert!(picky(&sup, &["status"]).status.success());
+    // So is a present-but-entryless one.
+    write(&sup.join(".gitmodules"), "");
+    assert!(picky(&sup, &["status"]).status.success());
+}
