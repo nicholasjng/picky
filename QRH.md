@@ -333,6 +333,9 @@ state left over from hand-editing `.gitmodules`.
 
 1. `picky doctor` — names the problem. Then, by what it reports:
    - *dangling gitlink* → `picky init <path>` rebuilds it.
+   - *sparse patterns drifted* → `picky init <path>` puts the checkout back on
+     the declared patterns, or `picky sparse set …` if the declaration is the
+     stale half.
    - *orphaned git dir* → `rm -rf` the path it names.
    - *`picky.<name>` with no `submodule.<name>`* → finish or remove the section
      in `.gitmodules`.

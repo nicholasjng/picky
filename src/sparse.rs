@@ -318,6 +318,79 @@ pub fn store_size(modules: &Path, sm: &Submodule) -> Option<u64> {
     dir_size(&gitdir)
 }
 
+/// How the checkout's actual sparse state differs from what `sm` declares, or
+/// `None` when they agree (or the submodule isn't checked out).
+///
+/// Drift comes from a `git sparse-checkout` run by hand inside the submodule,
+/// or a `.gitmodules` edit that was never reconciled. [`checkout`] fixes it
+/// silently on the next `init`/`update`; `doctor` reports it.
+///
+/// Order is compared, not just membership: these are non-cone gitignore-style
+/// patterns, where a later line overrides an earlier one, so a reordering can
+/// select a different tree.
+pub fn sparse_drift(root: &Path, sm: &Submodule) -> Option<String> {
+    let wt = root.join(&sm.path);
+    if !wt.join(".git").exists() {
+        return None;
+    }
+    // Unset (`--get` exits 1) is how a non-sparse checkout reads.
+    let enabled = git::capture_unless_unset(&wt, &["config", "--get", "core.sparseCheckout"])
+        .ok()?
+        .is_some_and(|v| v == "true");
+
+    if sm.sparse.is_empty() {
+        return enabled.then(|| {
+            "declares no sparse patterns (a full checkout) but the checkout is sparse".to_string()
+        });
+    }
+    if !enabled {
+        return Some(format!(
+            "declares {} sparse pattern(s) but the checkout is not sparse",
+            sm.sparse.len()
+        ));
+    }
+
+    // Only valid once sparsity is known to be enabled: on a full checkout
+    // `sparse-checkout list` fails with "this worktree is not sparse".
+    let listed = git::capture(&wt, &["sparse-checkout", "list"]).ok()?;
+    let actual: Vec<&str> = listed.lines().collect();
+    if actual == sm.sparse.iter().map(String::as_str).collect::<Vec<_>>() {
+        return None;
+    }
+
+    let missing: Vec<&str> = sm
+        .sparse
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !actual.contains(p))
+        .collect();
+    let extra: Vec<&str> = actual
+        .iter()
+        .copied()
+        .filter(|p| !sm.sparse.iter().any(|d| d == p))
+        .collect();
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!(
+            "declared but not in the checkout: {}",
+            missing.join(", ")
+        ));
+    }
+    if !extra.is_empty() {
+        parts.push(format!(
+            "in the checkout but not declared: {}",
+            extra.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        parts.push("the same patterns in a different order".to_string());
+    }
+    Some(format!(
+        "sparse patterns drifted from .gitmodules ({})",
+        parts.join("; ")
+    ))
+}
+
 /// Render a byte count the way `du -h` does: `812K`, `77M`, `1.2G`.
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];

@@ -347,13 +347,25 @@ you want.
 ### `doctor`
 
 `picky doctor` looks for state that usually comes from hand-editing
-`.gitmodules` instead of using `add`/`remove`/`sparse`: a dangling gitlink
-(worktree `.git` pointing at a missing git dir, self-heals on the next
-`init`), an orphaned `.git/modules/<path>` with no matching declaration, a
-`picky.<name>` section with no matching `submodule.<name>` section, or a
-declared path that escapes the superproject. It only warns and exits 0 by
-default; pass `--strict` to exit 1 when issues are found, for a pre-commit
-hook or CI check.
+`.gitmodules`, or a submodule, instead of using `add`/`remove`/`sparse`:
+
+- a declared `path` that escapes the superproject;
+- a dangling gitlink — worktree `.git` pointing at a missing git dir; the next
+  `init` rebuilds it;
+- **sparse drift** — the checkout's `git sparse-checkout` state no longer
+  matches the declared patterns;
+- an orphaned `.git/modules/<path>` with no matching declaration;
+- a `picky.<name>` section with no matching `submodule.<name>` section.
+
+It only warns and exits 0 by default; pass `--strict` to exit 1 when issues are
+found, for a pre-commit hook or CI check.
+
+Sparse drift is worth the check because `init` and `update` reconcile it
+silently — that is how a pattern edit takes effect — so a `git sparse-checkout`
+run by hand inside a submodule is otherwise visible only as files unexpectedly
+present or missing. The report names the declared-but-absent and
+present-but-undeclared patterns. Order counts as drift too: these are non-cone
+patterns, where a later line overrides an earlier one.
 
 ### Preflight
 

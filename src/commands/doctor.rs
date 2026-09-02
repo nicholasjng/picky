@@ -1,9 +1,10 @@
 //! `picky doctor`: sanity-check the repo's submodule state against
-//! `.gitmodules`. Dangling gitlinks, orphaned submodule git dirs left behind
-//! by hand-editing `.gitmodules` instead of `add`/`remove`, and half-edited
-//! `.gitmodules` sections. Diagnostic by default; reports issues as warnings
-//! and exits 0 regardless. `--strict` exits 1 when issues are found, for a
-//! pre-commit hook or CI check.
+//! `.gitmodules`. Dangling gitlinks, sparse patterns that drifted from the
+//! declaration, orphaned submodule git dirs left behind by hand-editing
+//! `.gitmodules` instead of `add`/`remove`, and half-edited `.gitmodules`
+//! sections. Diagnostic by default; reports issues as warnings and exits 0
+//! regardless. `--strict` exits 1 when issues are found, for a pre-commit
+//! hook or CI check.
 
 use anyhow::{Result, bail};
 use std::collections::HashSet;
@@ -36,6 +37,16 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
             if !valid {
                 con.warn(format!(
                     "{}: dangling gitlink, `picky init {}` will rebuild it",
+                    sm.path, sm.path
+                ));
+                issues += 1;
+                // The checks below read the submodule's own config, which a
+                // broken gitlink makes meaningless.
+                continue;
+            }
+            if let Some(drift) = sparse::sparse_drift(root, sm) {
+                con.warn(format!(
+                    "{}: {drift}; `picky init {}` will reconcile it",
                     sm.path, sm.path
                 ));
                 issues += 1;

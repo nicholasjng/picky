@@ -1813,3 +1813,72 @@ fn status_sizes_are_exact_byte_counts() {
     // A partial clone's object store outweighs a sparse working tree.
     assert!(store > size, "store {store} should exceed worktree {size}");
 }
+
+#[test]
+fn doctor_reports_sparse_drift_from_the_declaration() {
+    // `init`/`update` reconcile drift silently, so `doctor` is what reports a
+    // `git sparse-checkout` run by hand inside the submodule.
+    let (_tmp, sup, _v1) = fixture(&["/keep/", "/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // Clean to start with.
+    let out = picky(&sup, &["doctor", "--strict"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Patterns changed underneath picky.
+    git(
+        &dep,
+        &[
+            "sparse-checkout",
+            "set",
+            "--no-cone",
+            "--skip-checks",
+            "--",
+            "/keep/",
+        ],
+    );
+    let out = picky(&sup, &["doctor"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("drifted"), "{stderr}");
+    assert!(
+        stderr.contains("/src/"),
+        "should name the missing pattern: {stderr}"
+    );
+    assert!(!picky(&sup, &["doctor", "--strict"]).status.success());
+
+    // `init` reconciles it, and `doctor` goes quiet again.
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert!(picky(&sup, &["doctor", "--strict"]).status.success());
+
+    // Sparsity switched off entirely while patterns are still declared.
+    git(&dep, &["sparse-checkout", "disable"]);
+    let out = picky(&sup, &["doctor"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not sparse"), "{stderr}");
+
+    // And the inverse: nothing declared, but the checkout is sparse.
+    assert!(
+        picky(&sup, &["sparse", "clear", "-p", "ext/dep"])
+            .status
+            .success()
+    );
+    git(
+        &dep,
+        &[
+            "sparse-checkout",
+            "set",
+            "--no-cone",
+            "--skip-checks",
+            "--",
+            "/keep/",
+        ],
+    );
+    let out = picky(&sup, &["doctor"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("full checkout"), "{stderr}");
+}
