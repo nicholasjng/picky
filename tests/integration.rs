@@ -1704,3 +1704,26 @@ fn a_zero_depth_is_refused_before_any_work_happens() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("depth"), "{stderr}");
 }
+
+#[test]
+fn doctor_does_not_follow_symlinks_under_git_modules() {
+    // `is_dir()` follows symlinks, which sends the scan recursing through
+    // itself and reporting phantom `a/loop/a/loop/…` orphaned git dirs.
+    let (tmp, ..) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let modules = sup.join(".git/modules/a");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::os::unix::fs::symlink("../../modules", modules.join("loop")).unwrap();
+
+    let out = picky(&sup, &["doctor"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("loop/a/loop"),
+        "symlink was traversed: {stderr}"
+    );
+}

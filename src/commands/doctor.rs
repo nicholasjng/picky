@@ -95,7 +95,11 @@ fn find_gitdirs(base: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
         return;
     };
     for entry in entries.flatten() {
-        if entry.path().is_dir() {
+        // `file_type`, not `entry.path().is_dir()`: the latter follows
+        // symlinks, so a link back up the tree sends this recursing through
+        // itself, reporting phantom `a/loop/a/loop/…` orphans until the
+        // platform's symlink limit stops it.
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
             find_gitdirs(base, &rel.join(entry.file_name()), out);
         }
     }
