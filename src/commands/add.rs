@@ -8,21 +8,76 @@ use crate::config::{self, Submodule};
 use crate::console::Console;
 use crate::{git, hook, sparse};
 
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    root: &Path,
-    url: String,
-    path: String,
-    name: Option<String>,
-    sparse_pats: Vec<String>,
-    depth: Option<u32>,
-    filter: Option<String>,
-    branch: Option<String>,
-    reference: Option<String>,
-    patches: Option<String>,
-    post_update: Option<String>,
-    con: &Console,
-) -> Result<()> {
+/// Everything `picky add` needs to declare and build a submodule.
+///
+/// A struct rather than a positional argument list because six of these fields
+/// are `Option<String>` and two more are `String`, where transposing any two
+/// type-checks silently.
+#[derive(Debug, Clone)]
+pub struct AddOptions {
+    /// Remote URL, absolute or `../`-relative.
+    pub url: String,
+    /// Checkout path within the superproject.
+    pub path: String,
+    /// `.gitmodules` section name; defaults to `path`.
+    pub name: Option<String>,
+    /// Non-cone sparse-checkout patterns; empty ⇒ full checkout.
+    pub sparse: Vec<String>,
+    /// Shallow fetch depth; `add` defaults to `shallow = true` (depth 1).
+    pub depth: Option<u32>,
+    /// Partial-clone filter; `None` ⇒ the `blob:none` default.
+    pub filter: Option<String>,
+    /// Branch to track, recorded as `submodule.<name>.branch`.
+    pub branch: Option<String>,
+    /// Ref to pin to instead of the remote `HEAD`.
+    pub reference: Option<String>,
+    /// Directory holding the `*.patch` overlay stack.
+    pub patches: Option<String>,
+    /// Shell command to run after each checkout (post-update hook).
+    pub post_update: Option<String>,
+}
+
+impl AddOptions {
+    /// The two required fields, every optional one unset:
+    ///
+    /// ```
+    /// # use picky::AddOptions;
+    /// let opts = AddOptions {
+    ///     sparse: vec!["/src/".into()],
+    ///     ..AddOptions::new("https://example.com/x.git", "ext/dep")
+    /// };
+    /// assert_eq!(opts.path, "ext/dep");
+    /// ```
+    pub fn new(url: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            path: path.into(),
+            name: None,
+            sparse: Vec::new(),
+            depth: None,
+            filter: None,
+            branch: None,
+            reference: None,
+            patches: None,
+            post_update: None,
+        }
+    }
+}
+
+pub fn run(root: &Path, opts: AddOptions, con: &Console) -> Result<()> {
+    let AddOptions {
+        url,
+        path,
+        name,
+        sparse: sparse_pats,
+        depth,
+        filter,
+        branch,
+        reference,
+        patches,
+        post_update,
+    } = opts;
+
     // Before anything is created, fetched, or run: a path that escapes the
     // superproject would otherwise materialize a full clone outside the repo
     // and run the post-update hook there, only failing at the final `git add`.

@@ -9,24 +9,39 @@ use crate::config::{self, Submodule};
 use crate::console::Console;
 use crate::{git, hook, patch, sparse};
 
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    root: &Path,
-    arg1: Option<String>,
-    arg2: Option<String>,
-    no_patches: bool,
-    unshallow: bool,
-    depth: Option<u32>,
-    all: bool,
-    fresh: bool,
-    con: &Console,
-) -> Result<()> {
-    if all {
+/// What one `picky update` invocation should do. [`Default`] is a plain
+/// refresh: the lone submodule, onto its pin, patches applied.
+///
+/// A struct rather than a positional argument list because the flags are five
+/// consecutive `bool`/`Option` parameters, where transposing two type-checks
+/// silently.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateOptions {
+    /// First positional: a submodule path, or a ref when only one submodule
+    /// is declared.
+    pub target: Option<String>,
+    /// Second positional: the ref to bump to.
+    pub reference: Option<String>,
+    /// Skip the patch stack.
+    pub no_patches: bool,
+    /// Fetch full history + all tags rather than only the target ref.
+    pub unshallow: bool,
+    /// Override the shallow fetch depth.
+    pub depth: Option<u32>,
+    /// Refresh every declared submodule; can't be combined with
+    /// `target`/`reference`.
+    pub all: bool,
+    /// Wipe the git dir and rebuild from scratch at the target.
+    pub fresh: bool,
+}
+
+pub fn run(root: &Path, opts: UpdateOptions, con: &Console) -> Result<()> {
+    if opts.all {
         // Not redundant with clap's `conflicts_with_all`: `picky::update` is a
         // public library entry point that never goes through the parser.
-        if arg1.is_some() || arg2.is_some() {
+        if opts.target.is_some() || opts.reference.is_some() {
             bail!(
-                "--all refreshes every submodule at its current pin and can't be combined with a path or ref"
+                "--all refreshes every submodule onto its pinned commit and can't be combined with a path or ref"
             );
         }
         let targets = config::Config::load(root)?.all()?;
@@ -36,7 +51,7 @@ pub fn run(
         }
         for sm in targets {
             con.heading(format!("submodule {}", sm.path));
-            update_one(root, sm, None, no_patches, unshallow, depth, fresh, con)?;
+            update_one(root, sm, None, &opts, con)?;
         }
         return Ok(());
     }
@@ -45,34 +60,32 @@ pub fn run(
     // args it is unambiguous; with one, a value matching a submodule is a path
     // (refresh), otherwise it is a ref against the lone submodule.
     let cfg = config::Config::load(root)?;
-    let (sm, refarg): (Submodule, Option<String>) = match (arg1, arg2) {
-        (Some(a), Some(b)) => (cfg.find(&a)?, Some(b)),
-        (Some(a), None) => match cfg.find(&a) {
-            Ok(sm) => (sm, None),
-            Err(_) => (cfg.only()?, Some(a)),
-        },
-        (None, _) => (cfg.only()?, None),
-    };
-    update_one(root, sm, refarg, no_patches, unshallow, depth, fresh, con)
+    let (sm, refarg): (Submodule, Option<String>) =
+        match (opts.target.clone(), opts.reference.clone()) {
+            (Some(a), Some(b)) => (cfg.find(&a)?, Some(b)),
+            (Some(a), None) => match cfg.find(&a) {
+                Ok(sm) => (sm, None),
+                Err(_) => (cfg.only()?, Some(a)),
+            },
+            (None, _) => (cfg.only()?, None),
+        };
+    update_one(root, sm, refarg, &opts, con)
 }
 
 /// Bump (or, with `refarg: None`, just refresh) a single submodule: fetch if
 /// needed, re-checkout, re-apply the patch stack, run the post-update hook.
-#[allow(clippy::too_many_arguments)]
 fn update_one(
     root: &Path,
     mut sm: Submodule,
     refarg: Option<String>,
-    no_patches: bool,
-    unshallow: bool,
-    depth: Option<u32>,
-    fresh: bool,
+    opts: &UpdateOptions,
     con: &Console,
 ) -> Result<()> {
-    config::check_depth(depth)?;
-    if let Some(d) = depth {
+    config::check_depth(opts.depth)?;
+    if let Some(d) = opts.depth {
         sm.depth = Some(d);
     }
+    let fresh = opts.fresh;
 
     let wt = root.join(&sm.path);
     if !wt.join(".git").exists() {
@@ -130,7 +143,7 @@ fn update_one(
     }
 
     if bump || fresh {
-        if unshallow {
+        if opts.unshallow {
             // Opt-in: full history + all tags for `git describe`; fattens the
             // (blobless) object store with every tree/commit on a big repo.
             let shallow = git::capture(&wt, &["rev-parse", "--is-shallow-repository"])? == "true";
@@ -193,7 +206,7 @@ fn update_one(
     sparse::checkout(root, &sm, &refish, con)?;
     let new_sha = git::capture(&wt, &["rev-parse", "HEAD"])?;
 
-    let applied = if no_patches {
+    let applied = if opts.no_patches {
         0
     } else {
         patch::apply_stack(root, &sm, con)?
@@ -236,7 +249,11 @@ fn update_one(
     }
     con.plain(format!(
         "  patches applied: {applied}{}",
-        if no_patches { " (--no-patches)" } else { "" }
+        if opts.no_patches {
+            " (--no-patches)"
+        } else {
+            ""
+        }
     ));
     if bump {
         con.plain(format!(

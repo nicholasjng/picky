@@ -18,17 +18,29 @@
 //!   and [`Level`], so they cross a Tauri command boundary directly.
 //!
 //! ```no_run
-//! use picky::Console;
+//! use picky::{AddOptions, Console, UpdateOptions};
 //!
 //! let root = picky::repo_root()?;
 //! for sm in picky::submodules(&root)? {
 //!     println!("{} @ {}", sm.path, sm.url);
 //! }
 //! picky::init(&root, &[], &Console::silent())?;              // reconstruct all
-//! picky::update(                                             // bump one
-//!     &root, Some("ext/duckdb".into()), Some("v1.6.3".into()),
-//!     false, false, None, false, false, &Console::silent(),
-//! )?;
+//!
+//! picky::update(&root, UpdateOptions {                       // bump one
+//!     target: Some("ext/duckdb".into()),
+//!     reference: Some("v1.6.3".into()),
+//!     ..Default::default()
+//! }, &Console::silent())?;
+//!
+//! picky::update(&root, UpdateOptions {                       // refresh all
+//!     all: true,
+//!     ..Default::default()
+//! }, &Console::silent())?;
+//!
+//! picky::add(&root, AddOptions {                             // declare a new one
+//!     sparse: vec!["/src/".into(), "/third_party/".into()],
+//!     ..AddOptions::new("https://github.com/duckdb/duckdb.git", "ext/duckdb")
+//! }, &Console::silent())?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
@@ -43,6 +55,8 @@ pub mod patch;
 pub mod refcache;
 pub mod sparse;
 
+pub use commands::add::AddOptions;
+pub use commands::update::UpdateOptions;
 pub use config::Submodule;
 pub use console::{Console, Level, Sink};
 
@@ -72,25 +86,17 @@ pub fn remove(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result
     commands::remove::run(root, paths, yes, con)
 }
 
+/// Declare a submodule and check it out sparsely. See [`AddOptions`].
+pub fn add(root: &Path, opts: AddOptions, con: &Console) -> Result<()> {
+    commands::add::run(root, opts, con)
+}
+
 /// Bump the pin / re-checkout / re-apply the patch stack. See
-/// [`commands::update::run`] for the positional and flag semantics. `all`
-/// refreshes every declared submodule at its current pin instead (mutually
-/// exclusive with `target`/`reference`).
-#[allow(clippy::too_many_arguments)]
-pub fn update(
-    root: &Path,
-    target: Option<String>,
-    reference: Option<String>,
-    no_patches: bool,
-    unshallow: bool,
-    depth: Option<u32>,
-    all: bool,
-    fresh: bool,
-    con: &Console,
-) -> Result<()> {
-    commands::update::run(
-        root, target, reference, no_patches, unshallow, depth, all, fresh, con,
-    )
+/// [`UpdateOptions`] for the positional and flag semantics; `all` refreshes
+/// every declared submodule onto its pin instead (mutually exclusive with
+/// `target`/`reference`).
+pub fn update(root: &Path, opts: UpdateOptions, con: &Console) -> Result<()> {
+    commands::update::run(root, opts, con)
 }
 
 /// Replace a submodule's sparse pattern list and reconcile the checkout. `path`
