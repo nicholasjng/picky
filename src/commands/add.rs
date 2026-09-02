@@ -1,7 +1,7 @@
 //! `picky add <url> <path> …`: build the sparse checkout, then write and
 //! stage the `.gitmodules` entry and the new gitlink.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::path::Path;
 
 use crate::config::{self, Submodule};
@@ -28,6 +28,21 @@ pub fn run(
     // and run the post-update hook there, only failing at the final `git add`.
     config::check_path(&path)?;
     config::check_depth(depth)?;
+
+    // This path is about to be `git init`ed and checked out into. Re-running
+    // `add` over picky's own checkout is supported (it converges the
+    // declaration), so a directory holding a `.git` is fine; unrelated content
+    // is not, since checking out over it cannot be undone.
+    let dest = root.join(&path);
+    if dest.exists() && !dest.is_dir() {
+        bail!("'{path}' exists and is not a directory");
+    }
+    if dest.is_dir() && !dest.join(".git").exists() && dest.read_dir()?.next().is_some() {
+        bail!(
+            "'{path}' already exists and is not a git checkout; picky would check out \
+             on top of its contents. Move it aside, or choose another path."
+        );
+    }
 
     let sm = Submodule {
         name: name.unwrap_or_else(|| path.clone()),

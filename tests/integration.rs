@@ -1727,3 +1727,27 @@ fn doctor_does_not_follow_symlinks_under_git_modules() {
         "symlink was traversed: {stderr}"
     );
 }
+
+#[test]
+fn add_refuses_to_check_out_over_unrelated_content() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let occupied = sup.join("occupied");
+    write(&occupied.join("important.txt"), "mine\n");
+
+    let out = picky(&sup, &["add", &url, "occupied"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(occupied.join("important.txt")).unwrap(),
+        "mine\n",
+        "the pre-existing content must be untouched"
+    );
+    // An empty directory is fine (git leaves those for uninitialized
+    // submodules), as is re-adding over picky's own checkout.
+    let empty = sup.join("ext/dep");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(picky(&sup, &["add", &url, "ext/dep"]).status.success());
+    assert!(picky(&sup, &["add", &url, "ext/dep"]).status.success());
+}
