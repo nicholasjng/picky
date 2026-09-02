@@ -56,6 +56,20 @@ fn picky(dir: &Path, args: &[&str]) -> Output {
     picky_with_env(dir, args, &[])
 }
 
+/// Like [`picky`], but without `--quiet`, for asserting on the success and
+/// progress lines `--quiet` suppresses.
+fn picky_loud(dir: &Path, args: &[&str]) -> Output {
+    let mut cmd = Command::new(BIN);
+    cmd.args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("XDG_CACHE_HOME", dir.join(".cache"));
+    cmd.output().unwrap()
+}
+
 /// Like [`picky`], with extra environment variables set on the child (e.g.
 /// `PICKY_TRUST_HOOKS`).
 fn picky_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
@@ -1507,4 +1521,103 @@ fn an_unparseable_gitmodules_is_an_error_not_an_empty_config() {
     // So is a present-but-entryless one.
     write(&sup.join(".gitmodules"), "");
     assert!(picky(&sup, &["status"]).status.success());
+}
+
+#[test]
+fn refresh_moves_a_checkout_onto_a_pin_someone_else_bumped() {
+    // A refresh must target the gitlink pin, not the submodule's current HEAD:
+    // pulling a superproject commit that moved a pin is what `update --all`
+    // exists for.
+    let (_tmp, sup, v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert_eq!(git(&dep, &["rev-parse", "HEAD"]), v1);
+
+    // Move the pin in the index only, as pulling someone's bump does. v2 comes
+    // from the remote: the submodule was fetched shallow at v1.
+    let v2 = git(
+        &sup.parent().unwrap().join("remote.git"),
+        &["rev-parse", "v2"],
+    );
+    git(
+        &sup,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{v2},ext/dep"),
+        ],
+    );
+
+    let out = picky_loud(&sup, &["update", "--all"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        git(&dep, &["rev-parse", "HEAD"]),
+        v2,
+        "a refresh must move the checkout onto the pin"
+    );
+    assert!(
+        std::fs::read_to_string(dep.join("src/c.txt"))
+            .unwrap()
+            .contains("line4"),
+        "the working tree must hold v2's content"
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("moved onto its pin"), "{stdout}");
+
+    // Re-running is a clean no-op, and says so.
+    let out = picky_loud(&sup, &["update", "ext/dep"]);
+    assert!(out.status.success());
+    assert_eq!(git(&dep, &["rev-parse", "HEAD"]), v2);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("already on its pin"), "{stdout}");
+}
+
+#[test]
+fn refresh_fetches_a_pinned_commit_it_has_never_seen() {
+    // The pin may name a commit this shallow checkout never fetched, so a
+    // refresh must fetch before checking out.
+    let (_tmp, sup, v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+
+    // A shallow fetch of v1 brought no tags and no later commits, so v2 is
+    // absent from the submodule's object store.
+    let v2 = git(
+        &sup.parent().unwrap().join("remote.git"),
+        &["rev-parse", "v2"],
+    );
+    assert!(
+        !std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dep)
+            .args(["cat-file", "-e", &format!("{v2}^{{commit}}")])
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .status()
+            .unwrap()
+            .success(),
+        "fixture precondition: v2 should not be present locally yet"
+    );
+    git(
+        &sup,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{v2},ext/dep"),
+        ],
+    );
+    assert_ne!(git(&dep, &["rev-parse", "HEAD"]), v2);
+    assert_eq!(git(&dep, &["rev-parse", "HEAD"]), v1);
+
+    let out = picky(&sup, &["update", "ext/dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(git(&dep, &["rev-parse", "HEAD"]), v2);
 }

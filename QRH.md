@@ -116,11 +116,16 @@ compute candidates.
 
 **CONDITION** — You pulled the superproject; a submodule pin changed.
 
-1. `picky init` — moves every checkout onto its newly pinned commit.
-2. `picky update --all` — **only if** any submodule declares a patch stack.
-3. `picky status` — verify.
+1. `picky update --all` — moves every checkout onto its newly pinned commit and
+   re-applies each patch stack.
+2. `picky status` — verify.
 
-**NOTE** — Both commands are idempotent and safe to run when nothing changed.
+**NOTE** — Idempotent. Each submodule reports `moved onto its pin` or
+`already on its pin`.
+
+**NOTE** — `picky init` also moves checkouts onto their pins, but without
+patches ([1.1](#11-fresh-clone--submodules-empty)). Use it when a checkout
+needs rebuilding, not just moving.
 
 ### 2.3 Check for upstream updates
 

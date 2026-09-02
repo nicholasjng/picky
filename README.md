@@ -28,7 +28,7 @@ not supported.
 | `picky remove <path>… [--yes]`  | undeclare a submodule and delete its checkout (the inverse of `add`) |
 | `picky init [<path>…]`          | reconstruct checkout(s) from `.gitmodules` (no args ⇒ all) |
 | `picky update [<path>] [<ref>]` | bump pin / re-checkout / re-apply patches |
-| `picky update --all`            | refresh every declared submodule at its current pin (no bump) |
+| `picky update --all`            | move every declared submodule onto its pinned commit + re-apply patches (no bump) |
 | `picky sparse <list/add/remove/set/clear>` | edit sparse patterns + reconcile |
 | `picky status [<path>…] [--json]` | table (or JSON) of pin, branch, upstream staleness, sparse, filter, size, patches |
 | `picky refresh [<path>…]`       | refresh the cached remote ref list (for `<ref>` completion and `status`'s upstream column) |

@@ -101,7 +101,14 @@ fn update_one(
         ));
     }
 
-    let mut refish = refarg.unwrap_or_else(|| old_sha.clone());
+    // A refresh (no ref given) targets the superproject's gitlink pin, not the
+    // submodule's current `HEAD`: the two differ after a pulled commit moves
+    // the pin, which is what a refresh has to catch up with.
+    let mut refish = match refarg {
+        Some(r) => r,
+        None => sparse::pinned_sha(root, &sm.path)
+            .with_context(|| format!("resolving the commit pinned for {}", sm.path))?,
+    };
 
     if fresh {
         // `git gc` can never reclaim a partial clone's old packs,
@@ -176,6 +183,10 @@ fn update_one(
             })?;
             refish = "FETCH_HEAD".to_string();
         }
+    } else {
+        // A moved pin may name a commit this shallow checkout has never
+        // fetched, so make it present before `checkout` asks for it.
+        sparse::ensure_commit(root, &sm, &refish, con)?;
     }
 
     sparse::checkout(root, &sm, &refish, con)?;
@@ -207,10 +218,18 @@ fn update_one(
             short(&old_sha),
             short(&new_sha)
         ));
-    } else {
+    } else if new_sha == old_sha {
         con.success(format!(
-            "refreshed {} at {} (pin unchanged)",
+            "refreshed {} at {} (already on its pin)",
             sm.path,
+            short(&new_sha)
+        ));
+    } else {
+        // The pin moved under this checkout and the refresh caught it up.
+        con.success(format!(
+            "refreshed {}: {} -> {} (moved onto its pin)",
+            sm.path,
+            short(&old_sha),
             short(&new_sha)
         ));
     }

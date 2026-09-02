@@ -273,10 +273,17 @@ behaviour worth knowing beyond `--help`.
 ### `update`
 
 `update` accepts its two positionals smartly: with one argument, a value that
-matches a submodule path is treated as the path (refresh at current pin);
+matches a submodule path is treated as the path (refresh onto the pin);
 otherwise it's treated as a ref against the lone submodule. `--all` refreshes
-every declared submodule at its current pin instead, and can't be combined
-with a path or ref.
+every declared submodule instead, and can't be combined with a path or ref.
+
+A refresh — `update <path>` with no ref, or `update --all` — targets the
+superproject's **gitlink pin**, not whatever the submodule currently has
+checked out; the two differ after you pull a commit that moved the pin. It
+fetches the pinned commit if this shallow checkout has never seen it, moves
+the working tree onto it, and re-applies the patch stack. The result line is
+`moved onto its pin` or `already on its pin`. Nothing is staged: a refresh
+brings the checkout *to* the index, not the other way round.
 
 A bump fetches **only the target ref**, shallow + blobless (like `add`), so the
 object store stays small and no history is downloaded. Pass `--unshallow` to
