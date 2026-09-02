@@ -79,6 +79,29 @@ pub fn check_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parse a `picky.<name>.depth` value.
+///
+/// Zero is rejected here rather than at the fetch, where `git fetch --depth=0`
+/// dies with "depth 0 is not a positive number" only after the git dir is
+/// built and the remote configured, leaving a half-built checkout behind.
+fn parse_depth(name: &str, s: &str) -> Result<u32> {
+    let depth: u32 = s
+        .parse()
+        .with_context(|| format!("picky.{name}.depth is not a positive integer: '{s}'"))?;
+    check_depth(Some(depth))?;
+    Ok(depth)
+}
+
+/// Reject a zero fetch depth (see [`parse_depth`]). Clap bounds the `--depth`
+/// flags; this guards the library entry points, which never go through the
+/// parser.
+pub fn check_depth(depth: Option<u32>) -> Result<()> {
+    if depth == Some(0) {
+        bail!("depth must be at least 1 (`--depth 0` is not a valid shallow fetch)");
+    }
+    Ok(())
+}
+
 /// `.gitmodules` parsed once, in full.
 ///
 /// Every lookup used to be its own `git config --get`, so building the
@@ -195,11 +218,7 @@ impl Config {
             sparse: self.get_all(&own("sparse")),
             depth: self
                 .get(&own("depth"))
-                .map(|s| {
-                    s.parse().with_context(|| {
-                        format!("picky.{name}.depth is not a non-negative integer: '{s}'")
-                    })
-                })
+                .map(|s| parse_depth(name, s))
                 .transpose()?,
             filter: self.get(&own("filter")).map(str::to_string),
             patches: self.get(&own("patches")).map(str::to_string),

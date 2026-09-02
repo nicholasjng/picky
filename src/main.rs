@@ -152,8 +152,8 @@ enum Commands {
         /// Non-cone sparse-checkout pattern (repeatable); omit for a full checkout
         #[arg(long)]
         sparse: Vec<String>,
-        /// Shallow fetch depth
-        #[arg(long)]
+        /// Shallow fetch depth (at least 1)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         depth: Option<u32>,
         /// Partial-clone filter (e.g. blob:none, or none to disable)
         #[arg(long)]
@@ -204,8 +204,8 @@ enum Commands {
         /// the object store. Default fetches only the target ref, shallow.
         #[arg(long)]
         unshallow: bool,
-        /// Override the shallow fetch depth
-        #[arg(long)]
+        /// Override the shallow fetch depth (at least 1)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         depth: Option<u32>,
         /// Refresh every declared submodule at its current pin (no bump);
         /// can't be combined with a path or ref

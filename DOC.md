@@ -116,7 +116,7 @@ options live in a parallel `picky.<name>` section that stock git ignores entirel
 | `submodule.<name>.branch`  | git   | branch to track (used by `update <branch>`) |
 | `submodule.<name>.shallow` | git   | `true` ⇒ shallow fetch (depth 1 unless `depth` set) |
 | `picky.<name>.sparse`      | picky | **multivalued** non-cone pattern; absence ⇒ full checkout |
-| `picky.<name>.depth`       | picky | explicit shallow `--depth N` |
+| `picky.<name>.depth`       | picky | explicit shallow `--depth N` (at least 1) |
 | `picky.<name>.filter`      | picky | partial-clone filter; default `blob:none`, `none` disables |
 | `picky.<name>.patches`     | picky | directory of the `*.patch` overlay stack |
 | `picky.<name>.postUpdate`  | picky | shell command run after each checkout (post-update hook) |

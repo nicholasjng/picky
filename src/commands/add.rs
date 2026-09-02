@@ -27,6 +27,7 @@ pub fn run(
     // superproject would otherwise materialize a full clone outside the repo
     // and run the post-update hook there, only failing at the final `git add`.
     config::check_path(&path)?;
+    config::check_depth(depth)?;
 
     let sm = Submodule {
         name: name.unwrap_or_else(|| path.clone()),

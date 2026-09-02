@@ -69,6 +69,7 @@ fn update_one(
     fresh: bool,
     con: &Console,
 ) -> Result<()> {
+    config::check_depth(depth)?;
     if let Some(d) = depth {
         sm.depth = Some(d);
     }

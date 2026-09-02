@@ -1677,3 +1677,30 @@ fn a_relative_gitmodules_url_resolves_like_git_does() {
     let origin = git(&sup.join("ext/dep"), &["remote", "get-url", "origin"]);
     assert!(!origin.starts_with("../"), "unresolved origin: {origin}");
 }
+
+#[test]
+fn a_zero_depth_is_refused_before_any_work_happens() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+
+    // Clap rejects the flag outright, so nothing is created.
+    let out = picky(&sup, &["add", "--depth", "0", &url, "ext/dep"]);
+    assert!(!out.status.success());
+    assert!(
+        !sup.join("ext/dep").exists(),
+        "a rejected add built a git dir"
+    );
+    assert!(!sup.join(".git/modules/ext/dep").exists());
+
+    // A `picky.<name>.depth = 0` is reported too, rather than reaching
+    // `git fetch --depth=0` after the git dir is already built.
+    let (_tmp2, sup2, _v1) = fixture(&["/src/"], None);
+    git(
+        &sup2,
+        &["config", "-f", ".gitmodules", "picky.ext/dep.depth", "0"],
+    );
+    let out = picky(&sup2, &["status"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("depth"), "{stderr}");
+}
