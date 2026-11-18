@@ -95,7 +95,10 @@ pub fn write(url: &str, refs: &[(String, String)]) -> std::io::Result<()> {
 /// `refs/heads/` or `refs/tags/` prefix), or `None` on any failure.
 pub fn ls_remote(url: &str, timeout: Option<Duration>) -> Option<Vec<(String, String)>> {
     let mut child = Command::new("git")
-        .args(["ls-remote", "--heads", "--tags", "--refs", url])
+        // `--` before the URL: it comes from `.gitmodules`, and a value like
+        // `--upload-pack=<cmd>` would otherwise be parsed as an option and run
+        // `<cmd>`, on nothing more than a TAB press.
+        .args(["ls-remote", "--heads", "--tags", "--refs", "--", url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -81,7 +81,7 @@ pub fn run(root: &Path, opts: AddOptions, con: &Console) -> Result<()> {
     // Before anything is created, fetched, or run: a path that escapes the
     // superproject would otherwise materialize a full clone outside the repo
     // and run the post-update hook there, only failing at the final `git add`.
-    config::check_path(&path)?;
+    config::check_path_on_disk(root, &path)?;
     config::check_depth(depth)?;
 
     // This path is about to be `git init`ed and checked out into. Re-running

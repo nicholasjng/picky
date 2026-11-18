@@ -142,9 +142,9 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
     let wt = worktree.as_path();
     let url = origin_url(root, sm)?;
     if git::ok(wt, &["remote", "get-url", "origin"])? {
-        git::run(wt, &["remote", "set-url", "origin", &url])?;
+        git::run(wt, &["remote", "set-url", "--", "origin", &url])?;
     } else {
-        git::run(wt, &["remote", "add", "origin", &url])?;
+        git::run(wt, &["remote", "add", "--", "origin", &url])?;
     }
     git::run(wt, &["config", "extensions.partialClone", "origin"])?;
     git::run(wt, &["config", "remote.origin.promisor", "true"])?;

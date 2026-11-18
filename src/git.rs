@@ -8,7 +8,13 @@ use std::process::{Command, Stdio};
 
 fn base(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(args);
+    // Submodule paths reach git as pathspecs (`ls-files -- <path>`, `add --
+    // <path>`); literal matching keeps a path holding `*`, `?` or `[` from
+    // being read as a glob that matches some other entry.
+    cmd.arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_LITERAL_PATHSPECS", "1");
     cmd
 }
 

@@ -1882,3 +1882,96 @@ fn doctor_reports_sparse_drift_from_the_declaration() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("full checkout"), "{stderr}");
 }
+
+
+/// A `.gitmodules` URL is attacker-controlled in a hostile clone. Passed to
+/// `git ls-remote` without a `--`, a value like `--upload-pack=<cmd>` parses as
+/// an option and `<cmd>` runs against the superproject's own (local) remote:
+/// code execution from `picky refresh`, or from a TAB press.
+#[test]
+fn refresh_does_not_run_an_option_shaped_url() {
+    let (tmp, _url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    // The injected option needs a local remote to act on: the cwd's `origin`.
+    let remote = tmp.path().join("remote.git");
+    git(&sup, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    let marker = tmp.path().join("pwned");
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.x.path", "x"],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.x.url",
+            &format!("--upload-pack=touch {};git-upload-pack", marker.display()),
+        ],
+    );
+
+    let _ = picky(&sup, &["refresh"]);
+    assert!(!marker.exists(), "an option-shaped URL ran a command");
+}
+
+/// `check_path` is lexical; a committed symlink as a leading component sends
+/// `root.join(path)` outside the superproject, where `remove` deletes.
+#[cfg(unix)]
+#[test]
+fn remove_refuses_a_path_through_a_symlink() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let outside = tmp.path().join("outside");
+    write(&outside.join("dep/precious.txt"), "keep me\n");
+    std::os::unix::fs::symlink(&outside, sup.join("ext")).unwrap();
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/dep.path",
+            "ext/dep",
+        ],
+    );
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.ext/dep.url", &url],
+    );
+
+    let out = picky(&sup, &["remove", "ext/dep", "--yes"]);
+    assert!(!out.status.success(), "a symlinked path should be refused");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("symlink"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        outside.join("dep/precious.txt").exists(),
+        "nothing outside may be deleted"
+    );
+}
+
+/// `PICKY_TRUST_HOOKS=0` is an explicit opt-out; a bare presence check read
+/// it as blanket approval.
+#[test]
+fn post_update_hook_trust_env_var_zero_does_not_trust() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.postUpdate",
+            "touch .should-not-run",
+        ],
+    );
+    let out = picky_with_env(&sup, &["init", "ext/dep"], &[("PICKY_TRUST_HOOKS", "0")]);
+    assert!(
+        !out.status.success(),
+        "PICKY_TRUST_HOOKS=0 must not approve"
+    );
+    assert!(!sup.join("ext/dep/.should-not-run").exists());
+}

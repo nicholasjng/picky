@@ -17,6 +17,12 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
     }
     let cfg = config::Config::load(root)?;
     let targets: Vec<Submodule> = paths.iter().map(|p| cfg.find(p)).collect::<Result<_>>()?;
+    // Every path comes from committed `.gitmodules` and is deleted
+    // recursively below; vet them all before touching any, so one bad entry
+    // can't abort the batch after earlier ones are already gone.
+    for sm in &targets {
+        config::check_path_on_disk(root, &sm.path)?;
+    }
 
     if !yes {
         con.warn(format!(
@@ -38,9 +44,6 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
     for sm in &targets {
         con.heading(format!("removing submodule {}", sm.path));
 
-        // The path comes from committed `.gitmodules`, and everything below
-        // deletes it recursively; refuse one that escapes the superproject.
-        config::check_path(&sm.path)?;
         let worktree = root.join(&sm.path);
         if worktree.join(".git").exists()
             && let Ok(status) = git::capture(&worktree, &["status", "--porcelain"])
@@ -54,7 +57,7 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
 
         // Best-effort: undo `git submodule init`'s local registration in
         // `.git/config`; a no-op if it was never registered.
-        let _ = git::ok(root, &["submodule", "deinit", "-f", &sm.path]);
+        let _ = git::ok(root, &["submodule", "deinit", "-f", "--", &sm.path]);
 
         if worktree.exists() {
             con.step("Removing working tree");

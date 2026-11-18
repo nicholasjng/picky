@@ -130,7 +130,7 @@ fn update_one(
         // is to throw the git dir away and refetch just the target commit.
         con.step("Rebuilding from scratch (--fresh)");
         // Same guard as `remove`: this wipes the path recursively.
-        config::check_path(&sm.path)?;
+        config::check_path_on_disk(root, &sm.path)?;
         if wt.exists() {
             fs::remove_dir_all(&wt)?;
         }
@@ -220,7 +220,7 @@ fn update_one(
 
     if bump {
         // Record the moved pin in the superproject index.
-        git::run(root, &["add", &sm.path])?;
+        git::run(root, &["add", "--", &sm.path])?;
     }
 
     let short = |s: &str| s.get(..8).unwrap_or(s).to_string();

@@ -92,7 +92,7 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, sha: &str, con: &Conso
         return Ok(());
     }
 
-    if std::env::var_os("PICKY_TRUST_HOOKS").is_some() {
+    if trust_env_set() {
         git::run(root, &["config", &key, cmd])?;
         git::run(root, &["config", &sha_key, sha])?;
         return Ok(());
@@ -109,7 +109,8 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, sha: &str, con: &Conso
         bail!(
             "refusing to run an unapproved post-update hook non-interactively.\n  \
              Approve it once interactively, set PICKY_TRUST_HOOKS=1, or trust it \
-             directly:\n  git config {key} '{cmd}'\n  git config {sha_key} '{sha}'"
+             directly:\n  git config {key} {}\n  git config {sha_key} {sha}",
+            sh_quote(cmd)
         );
     }
 
@@ -124,4 +125,36 @@ fn ensure_trusted(root: &Path, sm: &Submodule, cmd: &str, sha: &str, con: &Conso
     git::run(root, &["config", &key, cmd])?;
     git::run(root, &["config", &sha_key, sha])?;
     Ok(())
+}
+
+/// Whether `PICKY_TRUST_HOOKS` blanket-approves hooks. Read as a git-style
+/// boolean, so `PICKY_TRUST_HOOKS=0` (or `false`, or empty) does *not* trust:
+/// a mere presence check would treat an explicit opt-out as an opt-in.
+fn trust_env_set() -> bool {
+    std::env::var("PICKY_TRUST_HOOKS")
+        .ok()
+        .and_then(|v| crate::config::parse_bool(v.trim()))
+        .unwrap_or(false)
+}
+
+/// Single-quote `s` for a POSIX shell. The refusal message prints a
+/// copy-pasteable `git config … <cmd>`, and `cmd` comes from `.gitmodules`:
+/// interpolated raw, a hook like `x'; touch pwned; '` would turn the
+/// suggested *approval* command into the attack itself.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sh_quote;
+
+    #[test]
+    fn sh_quote_neutralizes_embedded_quotes() {
+        assert_eq!(sh_quote("make all"), "'make all'");
+        assert_eq!(
+            sh_quote("x'; touch pwned; '"),
+            r"'x'\''; touch pwned; '\'''"
+        );
+    }
 }

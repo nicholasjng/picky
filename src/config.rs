@@ -79,6 +79,34 @@ pub fn check_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// [`check_path`], plus a check of what is on disk: no existing component of
+/// `<root>/<path>` may be a symlink.
+///
+/// `check_path` is lexical. With `ext` committed as a symlink to `$HOME`,
+/// `ext/dep` passes it while `root.join("ext/dep")` resolves to `$HOME/dep`,
+/// where the recursive deletes in `remove` and `update --fresh`, and the
+/// checkout `add` builds, would follow it.
+pub fn check_path_on_disk(root: &Path, path: &str) -> Result<()> {
+    use std::path::Component;
+    check_path(path)?;
+    let mut cur = root.to_path_buf();
+    for c in Path::new(path).components() {
+        let Component::Normal(part) = c else { continue };
+        cur.push(part);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => bail!(
+                "submodule path '{path}' runs through a symlink ({}); picky refuses \
+                 to build or delete a checkout outside the superproject",
+                cur.strip_prefix(root).unwrap_or(&cur).display()
+            ),
+            Ok(_) => {}
+            // Nothing exists from here down, so nothing further can be a link.
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 /// Parse a `picky.<name>.depth` value.
 ///
 /// Zero is rejected here rather than at the fetch, where `git fetch --depth=0`
@@ -251,6 +279,17 @@ impl Config {
             0 => bail!("no submodules declared in .gitmodules"),
             _ => bail!("multiple submodules declared, specify a path"),
         }
+    }
+}
+
+/// Parse a git config boolean value (see `git help config`, "boolean"):
+/// `true`/`yes`/`on`/non-zero and `false`/`no`/`off`/`0`/empty, any case.
+/// `None` for anything else.
+pub fn parse_bool(v: &str) -> Option<bool> {
+    match v.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" => Some(true),
+        "false" | "no" | "off" | "" => Some(false),
+        n => n.parse::<i64>().ok().map(|n| n != 0),
     }
 }
 
