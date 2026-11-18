@@ -155,7 +155,16 @@ pub fn run(
                 ..Default::default()
             },
             con,
-        )?;
+        )
+        // The declaration is already written and staged; say so, or a
+        // refused reconcile (unexported edits) reads as a lost edit.
+        .with_context(|| {
+            format!(
+                "the new patterns are saved and staged, but {0} was not reconciled \
+                 (`picky update {0}` does it)",
+                sm.path
+            )
+        })?;
     } else {
         commands::init::run(root, std::slice::from_ref(&sm.path), con)?;
     }

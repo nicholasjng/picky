@@ -33,7 +33,7 @@ submodule. Reference material lives in [DOC.md](DOC.md); the command list is in
 | Repo grew after many bumps | [5.2](#52-object-store-grew-after-repeated-bumps) |
 | `git describe` fails inside the submodule | [5.3](#53-git-describe-fails-in-the-submodule) |
 | Checkout looks broken | [5.4](#54-checkout-looks-broken) |
-| Warned about "changes beyond its patch stack" | [5.5](#55-changes-beyond-its-patch-stack) |
+| Update refused: "changes beyond its patch stack" | [5.5](#55-changes-beyond-its-patch-stack) |
 | Asked to approve a post-update hook | [5.6](#56-post-update-hook-approval-prompt) |
 | Running picky in CI | [6.1](#61-run-picky-non-interactively) |
 | Want CI to catch a broken `.gitmodules` | [6.2](#62-guard-gitmodules-in-ci) |
@@ -348,16 +348,16 @@ state left over from hand-editing `.gitmodules`.
 
 ### 5.5 "changes beyond its patch stack"
 
-**CONDITION** — `picky update` warns that the working tree changed since picky
-last left it, and is about to discard those changes.
+**CONDITION** — `picky update` (or a `picky sparse` edit) refuses to run because
+the working tree changed since picky last left it.
 
 **CAUSE** — An edit inside the submodule that isn't captured by a patch. The
-warning does *not* fire for the patch stack itself.
+check does *not* fire for the patch stack itself.
 
 1. `git -C <path> status` and `git -C <path> diff` — see what it is.
 2. **IF** you want to keep it → export it as a patch
-   ([4.2](#42-add-another-patch-to-an-existing-stack)) before re-running.
-3. **IF** not → re-run the update; the checkout is reset to target + patches.
+   ([4.2](#42-add-another-patch-to-an-existing-stack)), then re-run with `--force`.
+3. **IF** not → re-run with `--force`; the checkout is reset to target + patches.
 
 ### 5.6 Post-update hook approval prompt
 

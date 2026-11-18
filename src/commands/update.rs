@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::config::{self, Submodule};
 use crate::console::Console;
-use crate::{git, hook, patch, sparse};
+use crate::{commands, git, hook, patch, sparse};
 
 /// What one `picky update` invocation should do. [`Default`] is a plain
 /// refresh: the lone submodule, onto its pin, patches applied.
@@ -33,6 +33,9 @@ pub struct UpdateOptions {
     pub all: bool,
     /// Wipe the git dir and rebuild from scratch at the target.
     pub fresh: bool,
+    /// Discard working-tree changes beyond the patch stack instead of
+    /// refusing to.
+    pub force: bool,
 }
 
 pub fn run(root: &Path, opts: UpdateOptions, con: &Console) -> Result<()> {
@@ -49,11 +52,10 @@ pub fn run(root: &Path, opts: UpdateOptions, con: &Console) -> Result<()> {
             con.warn("no submodules declared in .gitmodules");
             return Ok(());
         }
-        for sm in targets {
+        return commands::for_each(&targets, con, |sm| {
             con.heading(format!("submodule {}", sm.path));
-            update_one(root, sm, None, &opts, con)?;
-        }
-        return Ok(());
+            update_one(root, sm.clone(), None, &opts, con)
+        });
     }
 
     // Resolve the two optional positionals into (submodule, ref). With two
@@ -104,8 +106,10 @@ fn update_one(
     let bump = refarg.is_some();
     let old_sha = git::capture(&wt, &["rev-parse", "HEAD"])?;
 
-    // `checkout -f` below discards the working tree; warn if there are changes
-    // not accounted for by patches/, so an unexported edit isn't lost silently.
+    // `checkout -f` below discards the working tree; refuse (short of
+    // `--force`) when it holds changes not accounted for by patches/, so an
+    // unexported edit is never lost to a routine refresh. A warning alone
+    // still lost it: it printed after the decision was already made.
     //
     // "Dirty" alone can't mean that: applying the patch stack *is* what makes
     // the tree dirty, so a plain `status --porcelain` check fired on every run
@@ -115,8 +119,16 @@ fn update_one(
     if let Some(state) = &state
         && recorded_state(root, &sm)?.as_deref() != Some(state.as_str())
     {
+        if !opts.force {
+            bail!(
+                "{0} has changes beyond its patch stack, which updating would discard.\n  \
+                 Inspect them with `git -C {0} diff HEAD`, export what you want to keep \
+                 as a patch, then re-run with --force to reset to target + patches.",
+                sm.path
+            );
+        }
         con.warn(format!(
-            "{} has changes beyond its patch stack; resetting to target + patches",
+            "{} has changes beyond its patch stack; discarding them (--force)",
             sm.path
         ));
     }

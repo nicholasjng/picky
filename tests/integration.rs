@@ -890,14 +890,25 @@ fn update_warns_only_about_changes_beyond_the_patch_stack() {
     assert!(out.status.success());
     assert!(!warned(&out), "patch-stack dirt must not warn");
 
-    // An edit inside a file the patch stack already touches must still warn:
-    // the status line is unchanged, only the content differs.
+    // An edit inside a file the patch stack already touches must still be
+    // caught: the status line is unchanged, only the content differs. It is
+    // refused outright, not merely warned about, so the edit survives.
     let c = dep.join("src/c.txt");
     let body = std::fs::read_to_string(&c).unwrap();
     write(&c, &format!("{body}hand-edit\n"));
     let out = picky(&sup, &["update"]);
+    assert!(
+        !out.status.success(),
+        "an unexported edit must stop the update"
+    );
+    assert!(warned(&out), "the refusal should name the cause");
+    assert!(std::fs::read_to_string(&c).unwrap().contains("hand-edit"));
+
+    // `--force` discards it, with a warning.
+    let out = picky(&sup, &["update", "--force"]);
     assert!(out.status.success());
-    assert!(warned(&out), "an unexported edit must warn");
+    assert!(warned(&out), "a forced discard must still warn");
+    assert!(!std::fs::read_to_string(&c).unwrap().contains("hand-edit"));
 
     // Settled again.
     let out = picky(&sup, &["update"]);
@@ -2092,4 +2103,73 @@ fn refresh_runs_ssh_in_batch_mode() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("could not reach"));
     let args = std::fs::read_to_string(&log).expect("fake ssh should have run");
     assert!(args.contains("BatchMode=yes"), "ssh args: {args}");
+}
+
+/// A superproject declaring and committing each of `names` at v1 from the
+/// shared remote. Returns (tmp, super_dir, remote_dir).
+fn multi_fixture(names: &[&str]) -> (TmpDir, PathBuf, PathBuf) {
+    let (tmp, url, v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    for name in names {
+        let gitlink = format!("160000,{v1},{name}");
+        git(&sup, &["update-index", "--add", "--cacheinfo", &gitlink]);
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.path"),
+                name,
+            ],
+        );
+        git(
+            &sup,
+            &[
+                "config",
+                "-f",
+                ".gitmodules",
+                &format!("submodule.{name}.url"),
+                &url,
+            ],
+        );
+    }
+    git(&sup, &["add", ".gitmodules"]);
+    git(&sup, &["commit", "-qm", "subs"]);
+    let remote = tmp.path().join("remote.git");
+    (tmp, sup, remote)
+}
+
+/// One failing submodule must not leave the rest of `update --all` undone.
+#[test]
+fn update_all_carries_on_past_a_failing_submodule() {
+    let (_tmp, sup, remote) = multi_fixture(&["ext/a", "ext/b"]);
+    assert!(picky(&sup, &["init"]).status.success());
+
+    // `a` holds an unexported edit, so its refresh is refused…
+    let a_file = sup.join("ext/a/README");
+    write(&a_file, "hand-edit\n");
+    // …while `b`'s pin moved and needs catching up.
+    let v2 = git(&remote, &["rev-parse", "v2"]);
+    git(
+        &sup,
+        &["update-index", "--cacheinfo", &format!("160000,{v2},ext/b")],
+    );
+
+    let out = picky(&sup, &["update", "--all"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a failed submodule must fail the run"
+    );
+    assert!(
+        stderr.contains("1 of 2 submodule(s) failed: ext/a"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&a_file).unwrap(), "hand-edit\n");
+    assert_eq!(
+        git(&sup.join("ext/b"), &["rev-parse", "HEAD"]),
+        v2,
+        "b must still be refreshed"
+    );
 }

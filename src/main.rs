@@ -212,6 +212,10 @@ enum Commands {
         /// can't be combined with a path or ref
         #[arg(long, conflicts_with_all = ["target", "reference"])]
         all: bool,
+        /// Discard working-tree changes beyond the patch stack; without it,
+        /// `update` refuses to reset a submodule holding unexported edits
+        #[arg(long)]
+        force: bool,
         /// Wipe the git dir and rebuild from scratch at the target instead of
         /// fetching on top of what's already there. `git gc` can never
         /// reclaim a partial clone's old packs, so this is the only way to
@@ -384,6 +388,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
             depth,
             all,
             fresh,
+            force,
         } => commands::update::run(
             &root,
             commands::update::UpdateOptions {
@@ -394,6 +399,7 @@ fn run(command: Commands, con: &Console) -> Result<()> {
                 depth,
                 all,
                 fresh,
+                force,
             },
             con,
         ),

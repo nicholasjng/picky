@@ -305,12 +305,15 @@ instead of fetching on top of what's already there. `git gc` can never reclaim
 a partial clone's old packs, so this is the only way to bound the object store
 to one fetch's worth however many prior bumps happened.
 
-Because `checkout -f` discards the working tree, `update` warns when it finds
-changes it can't account for. Applying the patch stack is itself what makes the
-tree dirty, so the warning is not "dirty" but "changed since picky last left
-it": a submodule whose patches reapply identically stays quiet, and a hand-edit
-you never exported to a patch is reported, including one made inside a file the
-patch stack already touches.
+Because `checkout -f` discards the working tree, `update` refuses to run when it
+finds changes it can't account for; `--force` discards them (with a warning).
+Applying the patch stack is itself what makes the tree dirty, so the check is
+not "dirty" but "changed since picky last left it": a submodule whose patches
+reapply identically passes, and a hand-edit you never exported to a patch is
+caught, including one made inside a file the patch stack already touches.
+
+`update --all` carries on past a submodule that fails, reports each failure,
+and exits non-zero at the end with the list of failed paths.
 
 ### `status`
 
