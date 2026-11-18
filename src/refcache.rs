@@ -121,17 +121,21 @@ pub fn write(url: &str, refs: &[(String, String)]) -> std::io::Result<()> {
 /// (the child is killed if it overruns). Returns bare `(name, sha)` pairs (no
 /// `refs/heads/` or `refs/tags/` prefix), or `None` on any failure.
 pub fn ls_remote(url: &str, timeout: Option<Duration>) -> Option<Vec<(String, String)>> {
-    let mut child = Command::new("git")
-        // `--` before the URL: it comes from `.gitmodules`, and a value like
-        // `--upload-pack=<cmd>` would otherwise be parsed as an option and run
-        // `<cmd>`, on nothing more than a TAB press.
-        .args(["ls-remote", "--heads", "--tags", "--refs", "--", url])
+    let mut cmd = Command::new("git");
+    // `--` before the URL: it comes from `.gitmodules`, and a value like
+    // `--upload-pack=<cmd>` would otherwise be parsed as an option and run
+    // `<cmd>`, on nothing more than a TAB press.
+    cmd.args(["ls-remote", "--heads", "--tags", "--refs", "--", url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0") // never block on a credential prompt
-        .spawn()
-        .ok()?;
+        // Never block on a credential prompt: this runs behind a TAB press,
+        // detached in the background, or several at once in `refresh`.
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(ssh) = batch_ssh_command() {
+        cmd.env("GIT_SSH_COMMAND", ssh);
+    }
+    let mut child = cmd.spawn().ok()?;
 
     // Drain stdout on a thread so a large ref list can't deadlock the pipe
     // while we poll for the timeout.
@@ -168,6 +172,25 @@ pub fn ls_remote(url: &str, timeout: Option<Duration>) -> Option<Vec<(String, St
 
     let out = reader.join().ok()?;
     status.success().then(|| parse(&out))
+}
+
+/// The ssh command that keeps an ssh remote from prompting, or `None` when the
+/// user configured their own.
+///
+/// `GIT_TERMINAL_PROMPT=0` only covers git's own prompts; ssh asks for a key
+/// passphrase or host-key confirmation on `/dev/tty` itself, which lands in
+/// the middle of a shell completion. `BatchMode` makes it fail instead. A
+/// user-configured ssh command (`GIT_SSH_COMMAND`, `GIT_SSH`,
+/// `core.sshCommand`) is left alone: replacing it could drop options their
+/// remote needs to be reached at all.
+fn batch_ssh_command() -> Option<&'static str> {
+    let user_env = ["GIT_SSH_COMMAND", "GIT_SSH"]
+        .iter()
+        .any(|k| std::env::var_os(k).is_some());
+    let user_config =
+        crate::git::capture_unless_unset(Path::new("."), &["config", "--get", "core.sshCommand"])
+            .map_or(true, |v| v.is_some());
+    (!user_env && !user_config).then_some("ssh -o BatchMode=yes")
 }
 
 fn parse(out: &str) -> Vec<(String, String)> {

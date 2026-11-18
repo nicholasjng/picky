@@ -2046,3 +2046,50 @@ fn post_update_hook_trust_env_var_zero_does_not_trust() {
     );
     assert!(!sup.join("ext/dep/.should-not-run").exists());
 }
+
+/// ssh prompts on `/dev/tty` itself, past `GIT_TERMINAL_PROMPT=0`, which
+/// lands a passphrase prompt in the middle of a shell completion. Unless the
+/// user configured their own ssh command, `ls-remote` runs ssh in batch mode.
+#[cfg(unix)]
+#[test]
+fn refresh_runs_ssh_in_batch_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, _url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let bin = tmp.path().join("bin");
+    let log = tmp.path().join("ssh-args");
+    write(
+        &bin.join("ssh"),
+        &format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", log.display()),
+    );
+    std::fs::set_permissions(bin.join("ssh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &sup,
+        &["config", "-f", ".gitmodules", "submodule.x.path", "x"],
+    );
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.x.url",
+            "ssh://example.invalid/x.git",
+        ],
+    );
+
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let out = Command::new(BIN)
+        .args(["--quiet", "refresh"])
+        .current_dir(&sup)
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", sup.join(".cache"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_SSH")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("could not reach"));
+    let args = std::fs::read_to_string(&log).expect("fake ssh should have run");
+    assert!(args.contains("BatchMode=yes"), "ssh args: {args}");
+}

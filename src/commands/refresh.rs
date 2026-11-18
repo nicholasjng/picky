@@ -43,7 +43,13 @@ pub fn run(root: &Path, paths: &[String], con: &Console) -> Result<()> {
                     Err(e) => con.warn(format!("{}: caching refs failed: {e}", sm.path)),
                 }
             }
-            None => con.warn(format!("{}: could not reach {url}", sm.path)),
+            // Credential prompts are suppressed (see `refcache::ls_remote`),
+            // so an ssh key that needs a passphrase fails here.
+            None => con.warn(format!(
+                "{}: could not reach {url} (picky never prompts for credentials; \
+                 load ssh keys into an agent or use a credential helper)",
+                sm.path
+            )),
         }
     }
     Ok(())
