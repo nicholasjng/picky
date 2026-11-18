@@ -2173,3 +2173,35 @@ fn update_all_carries_on_past_a_failing_submodule() {
         "b must still be refreshed"
     );
 }
+
+/// Several submodules check out concurrently; one with an unreachable remote
+/// fails on its own without taking the others down.
+#[test]
+fn init_of_many_checks_out_the_rest_when_one_fails() {
+    let names = ["ext/a", "ext/b", "ext/c", "ext/d", "ext/e"];
+    let (_tmp, sup, _remote) = multi_fixture(&names);
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.ext/c.url",
+            "file:///nonexistent/remote.git",
+        ],
+    );
+
+    let out = picky(&sup, &["init"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("1 of 5 submodule(s) failed: ext/c"),
+        "{stderr}"
+    );
+    for name in names.iter().filter(|n| **n != "ext/c") {
+        assert!(
+            sup.join(name).join("README").exists(),
+            "{name} should be checked out"
+        );
+    }
+}
