@@ -366,15 +366,47 @@ pub fn only(root: &Path) -> Result<Submodule> {
     Config::load(root)?.only()
 }
 
+/// Apply `edits` to `.gitmodules` all-or-nothing.
+///
+/// An edit is several `git config -f` calls (about a dozen for [`write`], one
+/// per pattern for [`set_sparse`]); run against the real file, a failure part
+/// way through left a half-written declaration behind. They run against a
+/// private copy instead, which replaces the file in one `rename` only once
+/// every call succeeded. `edits` receives the copy's path relative to `root`.
+fn edit(root: &Path, edits: impl FnOnce(&str) -> Result<()>) -> Result<()> {
+    let file = root.join(FILE);
+    let tmp_name = format!("{FILE}.picky-{}.tmp", std::process::id());
+    let tmp = root.join(&tmp_name);
+    if file.exists() {
+        // `copy` carries the permissions over too.
+        std::fs::copy(&file, &tmp).with_context(|| format!("copying {FILE} to edit it"))?;
+    }
+    let result = edits(&tmp_name).and_then(|()| {
+        // Edits that only unset keys of an absent file create nothing.
+        if tmp.exists() {
+            std::fs::rename(&tmp, &file).with_context(|| format!("replacing {FILE}"))?;
+        }
+        Ok(())
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Replace the multivalued `picky.<name>.sparse` list for a submodule. Clears
 /// the existing values and re-adds `patterns` verbatim, so removal is by exact
 /// value (no `git config --unset` regex interpretation of patterns like
 /// `/extension/*.cmake`).
 pub fn set_sparse(root: &Path, name: &str, patterns: &[String]) -> Result<()> {
+    edit(root, |file| set_sparse_in(root, file, name, patterns))
+}
+
+fn set_sparse_in(root: &Path, file: &str, name: &str, patterns: &[String]) -> Result<()> {
     let key = format!("picky.{name}.sparse");
-    let _ = git::ok(root, &["config", "-f", FILE, "--unset-all", &key]);
+    let _ = git::ok(root, &["config", "-f", file, "--unset-all", &key]);
     for pat in patterns {
-        git::run(root, &["config", "-f", FILE, "--add", &key, pat])?;
+        git::run(root, &["config", "-f", file, "--add", &key, pat])?;
     }
     Ok(())
 }
@@ -388,29 +420,31 @@ pub fn set_sparse(root: &Path, name: &str, patterns: &[String]) -> Result<()> {
 pub fn write(root: &Path, sm: &Submodule) -> Result<()> {
     let sub = |k: &str| format!("submodule.{}.{}", sm.name, k);
     let own = |k: &str| format!("picky.{}.{}", sm.name, k);
-
-    git::run(root, &["config", "-f", FILE, &sub("path"), &sm.path])?;
-    git::run(root, &["config", "-f", FILE, &sub("url"), &sm.url])?;
-    set_or_unset(root, &sub("branch"), sm.branch.as_deref())?;
-    set_or_unset(root, &sub("shallow"), sm.shallow.then_some("true"))?;
     let depth = sm.depth.map(|d| d.to_string());
-    set_or_unset(root, &own("depth"), depth.as_deref())?;
-    set_or_unset(root, &own("filter"), sm.filter.as_deref())?;
-    set_or_unset(root, &own("patches"), sm.patches.as_deref())?;
-    set_or_unset(root, &own("postUpdate"), sm.post_update.as_deref())?;
-    // Multivalued: clear any prior list, then append each pattern.
-    set_sparse(root, &sm.name, &sm.sparse)?;
-    Ok(())
+
+    edit(root, |file| {
+        let set = |key: &str, value: Option<&str>| set_or_unset(root, file, key, value);
+        set(&sub("path"), Some(&sm.path))?;
+        set(&sub("url"), Some(&sm.url))?;
+        set(&sub("branch"), sm.branch.as_deref())?;
+        set(&sub("shallow"), sm.shallow.then_some("true"))?;
+        set(&own("depth"), depth.as_deref())?;
+        set(&own("filter"), sm.filter.as_deref())?;
+        set(&own("patches"), sm.patches.as_deref())?;
+        set(&own("postUpdate"), sm.post_update.as_deref())?;
+        // Multivalued: clear any prior list, then append each pattern.
+        set_sparse_in(root, file, &sm.name, &sm.sparse)
+    })
 }
 
 /// Set `key` to `value`, or unset it when `value` is `None` (best-effort: a
 /// key that was never set is not an error). The primitive that makes
 /// [`write`] declarative rather than additive.
-fn set_or_unset(root: &Path, key: &str, value: Option<&str>) -> Result<()> {
+fn set_or_unset(root: &Path, file: &str, key: &str, value: Option<&str>) -> Result<()> {
     match value {
-        Some(v) => git::run(root, &["config", "-f", FILE, key, v]),
+        Some(v) => git::run(root, &["config", "-f", file, key, v]),
         None => {
-            let _ = git::ok(root, &["config", "-f", FILE, "--unset", key]);
+            let _ = git::ok(root, &["config", "-f", file, "--unset", key]);
             Ok(())
         }
     }
@@ -420,27 +454,13 @@ fn set_or_unset(root: &Path, key: &str, value: Option<&str>) -> Result<()> {
 /// `submodule.<name>` section and picky's own `picky.<name>` section (which
 /// may not exist if no picky-specific option was ever set).
 pub fn remove(root: &Path, name: &str) -> Result<()> {
-    git::run(
-        root,
-        &[
-            "config",
-            "-f",
-            FILE,
-            "--remove-section",
-            &format!("submodule.{name}"),
-        ],
-    )?;
-    let _ = git::ok(
-        root,
-        &[
-            "config",
-            "-f",
-            FILE,
-            "--remove-section",
-            &format!("picky.{name}"),
-        ],
-    );
-    Ok(())
+    let sub = format!("submodule.{name}");
+    let own = format!("picky.{name}");
+    edit(root, |file| {
+        git::run(root, &["config", "-f", file, "--remove-section", &sub])?;
+        let _ = git::ok(root, &["config", "-f", file, "--remove-section", &own]);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -544,6 +564,26 @@ mod tests {
         }
         assert!(shallow("submodule.a.shallow\nmaybe").is_err());
         assert_eq!(parse_bool("ON"), Some(true));
+    }
+
+    #[test]
+    fn a_failed_edit_leaves_gitmodules_untouched() {
+        let dir = std::env::temp_dir().join(format!("picky-config-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(super::FILE);
+        std::fs::write(&file, "[submodule \"a\"]\n\tpath = a\n").unwrap();
+        let before = std::fs::read_to_string(&file).unwrap();
+
+        let result = super::edit(&dir, |tmp| {
+            crate::git::run(&dir, &["config", "-f", tmp, "submodule.a.url", "x"])?;
+            anyhow::bail!("a later call failed")
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        let leftovers = std::fs::read_dir(&dir).unwrap().count();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(leftovers, 1, "the private copy should be cleaned up");
     }
 
     #[test]
