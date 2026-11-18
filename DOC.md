@@ -79,8 +79,9 @@ scripted use, required when not running attached to a terminal.
 
 For each submodule, `picky`:
 
-1. builds the submodule git dir under `.git/modules/<path>` (where `git
-   submodule` expects it);
+1. builds the submodule git dir under `.git/modules/<name>` (where `git
+   submodule` expects it; checkouts built by older picky versions under
+   `.git/modules/<path>` keep working, and `update --fresh` moves them);
 2. configures a partial clone (`extensions.partialClone`,
    `remote.origin.promisor`, `partialclonefilter=blob:none`) and non-cone
    sparse-checkout **before** the first checkout, so unused paths are never
@@ -359,7 +360,7 @@ you want.
   `init` rebuilds it;
 - **sparse drift** — the checkout's `git sparse-checkout` state no longer
   matches the declared patterns;
-- an orphaned `.git/modules/<path>` with no matching declaration;
+- an orphaned git dir under `.git/modules` that no declared submodule uses;
 - a `picky.<name>` section with no matching `submodule.<name>` section.
 
 It only warns and exits 0 by default; pass `--strict` to exit 1 when issues are

@@ -55,6 +55,12 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
             ));
         }
 
+        // Resolved before the working tree goes: its `.git` link is what
+        // finds a git dir built under the older `.git/modules/<path>` layout.
+        let gitdir = sparse::modules_dir(root)
+            .ok()
+            .and_then(|modules| sparse::existing_gitdir(root, &modules, sm));
+
         // Best-effort: undo `git submodule init`'s local registration in
         // `.git/config`; a no-op if it was never registered.
         let _ = git::ok(root, &["submodule", "deinit", "-f", "--", &sm.path]);
@@ -64,9 +70,7 @@ pub fn run(root: &Path, paths: &[String], yes: bool, con: &Console) -> Result<()
             fs::remove_dir_all(&worktree)?;
         }
 
-        if let Ok(gitdir) = sparse::gitdir(root, sm)
-            && gitdir.exists()
-        {
+        if let Some(gitdir) = gitdir {
             con.step("Removing git dir");
             fs::remove_dir_all(&gitdir)?;
         }

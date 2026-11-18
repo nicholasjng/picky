@@ -149,12 +149,14 @@ fn update_one(
         con.step("Rebuilding from scratch (--fresh)");
         // Same guard as `remove`: this wipes the path recursively.
         config::check_path_on_disk(root, &sm.path)?;
+        // Resolved before the working tree (and its `.git` link) goes. The
+        // rebuild below lands at `.git/modules/<name>`, which also moves a
+        // checkout off the older `<path>` layout.
+        let gitdir = sparse::existing_gitdir(root, &sparse::modules_dir(root)?, &sm);
         if wt.exists() {
             fs::remove_dir_all(&wt)?;
         }
-        if let Ok(gitdir) = sparse::gitdir(root, &sm)
-            && gitdir.exists()
-        {
+        if let Some(gitdir) = gitdir {
             fs::remove_dir_all(&gitdir)?;
         }
         sparse::prepare(root, &sm, con)?;

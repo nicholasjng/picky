@@ -53,9 +53,49 @@ pub fn modules_dir(root: &Path) -> Result<PathBuf> {
 }
 
 /// Absolute git dir where `git submodule` expects this submodule's repository:
-/// `<root>/.git/modules/<path>`.
+/// `<root>/.git/modules/<name>`.
+///
+/// Keyed by name, not path, as git keys it: `git submodule absorbgitdirs`,
+/// `deinit` and friends look there, and a name survives the submodule being
+/// moved to another path. Checkouts picky built before this used
+/// `.git/modules/<path>`; [`existing_gitdir`] still finds those.
 pub fn gitdir(root: &Path, sm: &Submodule) -> Result<PathBuf> {
-    Ok(modules_dir(root)?.join(&sm.path))
+    crate::config::check_name(&sm.name)?;
+    Ok(modules_dir(root)?.join(&sm.name))
+}
+
+/// The git dir a checkout at `wt` links to through its `.git` file
+/// (`gitdir: <path>`, relative to `wt` when not absolute), if it has one.
+/// Read directly rather than through `git rev-parse`, which `status` would
+/// otherwise pay once per row.
+fn linked_gitdir(wt: &Path) -> Option<PathBuf> {
+    let link = fs::read_to_string(wt.join(".git")).ok()?;
+    let target = Path::new(link.strip_prefix("gitdir:")?.trim());
+    Some(wt.join(target))
+}
+
+/// The git dir this submodule actually uses, if one exists: the one its
+/// checkout links to, else the one at [`gitdir`]'s location.
+///
+/// The link is what finds a checkout built under the older
+/// `.git/modules/<path>` layout. It is only trusted when it lands inside
+/// `modules`, since callers delete what this returns.
+pub fn existing_gitdir(root: &Path, modules: &Path, sm: &Submodule) -> Option<PathBuf> {
+    let inside = |dir: &Path| {
+        let (Ok(dir), Ok(modules)) = (dir.canonicalize(), modules.canonicalize()) else {
+            return false;
+        };
+        dir.starts_with(&modules) && dir != modules
+    };
+    if let Some(linked) = linked_gitdir(&root.join(&sm.path))
+        && linked.is_dir()
+        && inside(&linked)
+    {
+        return Some(linked);
+    }
+    crate::config::check_name(&sm.name).ok()?;
+    let by_name = modules.join(&sm.name);
+    (by_name.is_dir() && inside(&by_name)).then_some(by_name)
 }
 
 /// Whether a `.gitmodules` URL is one git resolves against the superproject's
@@ -321,12 +361,8 @@ pub fn worktree_size(root: &Path, sm: &Submodule) -> Option<u64> {
 ///
 /// Takes the `.git/modules` directory rather than resolving it per call, so a
 /// caller measuring every submodule resolves it once ([`modules_dir`]).
-pub fn store_size(modules: &Path, sm: &Submodule) -> Option<u64> {
-    let gitdir = modules.join(&sm.path);
-    if !gitdir.is_dir() {
-        return None;
-    }
-    dir_size(&gitdir)
+pub fn store_size(root: &Path, modules: &Path, sm: &Submodule) -> Option<u64> {
+    dir_size(&existing_gitdir(root, modules, sm)?)
 }
 
 /// How the checkout's actual sparse state differs from what `sm` declares, or

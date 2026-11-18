@@ -302,7 +302,7 @@ the default shallow fetch working.
 ### 5.2 Object store grew after repeated bumps
 
 **CONDITION** — `picky status` shows a `STORE` far above `SIZE`: the object
-store in `.git/modules/<path>` outweighs the working tree.
+store in `.git/modules/<name>` outweighs the working tree.
 
 **CAUSE** — `git gc` can never reclaim a partial clone's old packs, so every
 bump adds to the store permanently.

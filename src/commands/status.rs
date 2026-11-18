@@ -142,7 +142,7 @@ fn row(root: &Path, modules: Option<&Path>, sm: &Submodule) -> Row {
             .flatten(),
         // Reported even with no working tree, to surface an object store left
         // behind by a deleted checkout.
-        store: modules.and_then(|m| sparse::store_size(m, sm)),
+        store: modules.and_then(|m| sparse::store_size(root, m, sm)),
         patches: patch_count(root, sm),
     }
 }

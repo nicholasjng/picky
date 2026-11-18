@@ -2205,3 +2205,105 @@ fn init_of_many_checks_out_the_rest_when_one_fails() {
         );
     }
 }
+
+/// `picky status --json`'s `store` field for the first row.
+fn status_store(sup: &Path) -> String {
+    let out = picky(sup, &["status", "--json"]);
+    let json = String::from_utf8_lossy(&out.stdout).to_string();
+    let at = json.find("\"store\": ").expect("store field") + 9;
+    json[at..]
+        .split([',', '}'])
+        .next()
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// Git keys a submodule's git dir by *name*; `git submodule absorbgitdirs`,
+/// `deinit` and friends look there. picky used the path, which only matched
+/// git when the two happened to be equal.
+#[test]
+fn a_named_submodule_keeps_its_git_dir_under_its_name() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let out = picky(&sup, &["add", &url, "ext/dep", "--name", "dep"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let modules = sup.join(".git/modules");
+    assert!(
+        modules.join("dep").is_dir(),
+        "git dir should be keyed by name"
+    );
+    assert!(!modules.join("ext/dep").exists());
+
+    assert_ne!(status_store(&sup), "null");
+    let out = picky(&sup, &["doctor", "--strict"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        picky(&sup, &["remove", "ext/dep", "--yes"])
+            .status
+            .success()
+    );
+    assert!(
+        !modules.join("dep").exists(),
+        "remove should delete the git dir"
+    );
+}
+
+/// A checkout built under the older `.git/modules/<path>` layout keeps
+/// working: found through its `.git` link, not reported as an orphan, and
+/// cleaned up by `remove`.
+#[test]
+fn a_git_dir_in_the_older_path_layout_is_still_found() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    assert!(
+        picky(&sup, &["add", &url, "ext/dep", "--name", "dep"])
+            .status
+            .success()
+    );
+    // Move it to where earlier picky versions put it, and relink.
+    let modules = sup.join(".git/modules");
+    let legacy = modules.join("ext/dep");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::rename(modules.join("dep"), &legacy).unwrap();
+    write(
+        &sup.join("ext/dep/.git"),
+        &format!("gitdir: {}\n", legacy.display()),
+    );
+
+    assert_ne!(status_store(&sup), "null");
+    let out = picky(&sup, &["doctor", "--strict"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        picky(&sup, &["remove", "ext/dep", "--yes"])
+            .status
+            .success()
+    );
+    assert!(!legacy.exists(), "remove should delete the linked git dir");
+}
+
+/// The name now picks a directory that gets deleted recursively, so one that
+/// escapes `.git/modules` is refused before any work happens.
+#[test]
+fn add_refuses_a_name_escaping_the_modules_dir() {
+    let (tmp, url, _v1) = remote_fixture();
+    let sup = empty_super(&tmp);
+    let out = picky(&sup, &["add", &url, "ext/dep", "--name", "../../escape"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("must stay inside .git/modules"));
+    assert!(!sup.join("ext/dep").exists(), "nothing should be built");
+}

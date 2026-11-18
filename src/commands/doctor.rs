@@ -17,13 +17,19 @@ use crate::{git, sparse};
 pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
     let cfg = config::Config::load(root)?;
     let declared = cfg.all()?;
-    let declared_paths: HashSet<&str> = declared.iter().map(|sm| sm.path.as_str()).collect();
     let mut issues = 0usize;
 
     for sm in &declared {
         if let Err(e) = config::check_path(&sm.path) {
             con.warn(format!(
                 "{e}; picky refuses to check out or delete this path"
+            ));
+            issues += 1;
+            continue;
+        }
+        if let Err(e) = config::check_name(&sm.name) {
+            con.warn(format!(
+                "{e}; picky refuses to build or delete this submodule's git dir"
             ));
             issues += 1;
             continue;
@@ -57,13 +63,26 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
     // Ask git rather than assuming `.git/modules`: the two disagree under a
     // linked worktree or an explicit `GIT_DIR`.
     let modules = sparse::modules_dir(root).unwrap_or_else(|_| root.join(".git/modules"));
+    // A git dir is in use when a declared submodule resolves to it: at
+    // `.git/modules/<name>`, or wherever its checkout links (the older
+    // `.git/modules/<path>` layout). Compared canonically, since the link
+    // and `modules` may spell the same directory differently.
+    let in_use: HashSet<PathBuf> = declared
+        .iter()
+        .filter_map(|sm| sparse::existing_gitdir(root, &modules, sm))
+        .filter_map(|dir| dir.canonicalize().ok())
+        .collect();
     let mut gitdirs = Vec::new();
     find_gitdirs(&modules, Path::new(""), &mut gitdirs);
     for rel in &gitdirs {
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        if !declared_paths.contains(rel_str.as_str()) {
+        let used = modules
+            .join(rel)
+            .canonicalize()
+            .is_ok_and(|dir| in_use.contains(&dir));
+        if !used {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
             con.warn(format!(
-                "orphaned git dir .git/modules/{rel_str}: no submodule declares this path; \
+                "orphaned git dir .git/modules/{rel_str}: no declared submodule uses it; \
                  remove it with `rm -rf .git/modules/{rel_str}` if it's no longer needed"
             ));
             issues += 1;
@@ -93,8 +112,8 @@ pub fn run(root: &Path, strict: bool, con: &Console) -> Result<()> {
 
 /// Recursively find leaf directories under `base` that look like a git dir
 /// (have both `HEAD` and `config`), returning each one's path relative to
-/// `base`: the shape `.git/modules/<submodule path>` takes for a submodule
-/// whose own path contains slashes (e.g. `ext/dep`).
+/// `base`: the shape `.git/modules/<submodule name>` takes for a submodule
+/// whose name contains slashes (e.g. `ext/dep`).
 fn find_gitdirs(base: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
     let dir = base.join(rel);
     if dir.join("HEAD").is_file() && dir.join("config").is_file() {

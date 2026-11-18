@@ -59,22 +59,34 @@ impl Submodule {
 /// refuses such names ("ignoring suspicious submodule name"); this is the same
 /// guard, applied before picky acts rather than after.
 pub fn check_path(path: &str) -> Result<()> {
+    check_relative("path", path, "the superproject")
+}
+
+/// Reject a submodule name that would escape `.git/modules`.
+///
+/// The name picks the submodule's git dir (`.git/modules/<name>`), which
+/// `remove` and `update --fresh` delete recursively, so it gets the same
+/// guard as [`check_path`]. Git refuses the same names for the same reason.
+pub fn check_name(name: &str) -> Result<()> {
+    check_relative("name", name, ".git/modules")
+}
+
+/// The shared lexical check behind [`check_path`] and [`check_name`]: a
+/// non-empty relative path with no `..`, naming something below its base.
+fn check_relative(what: &str, value: &str, base: &str) -> Result<()> {
     use std::path::Component;
-    if path.is_empty() {
-        bail!("submodule path is empty");
+    if value.is_empty() {
+        bail!("submodule {what} is empty");
     }
-    let p = Path::new(path);
+    let p = Path::new(value);
     if !p
         .components()
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
     {
-        bail!(
-            "submodule path '{path}' must stay inside the superproject \
-             (no leading '/', no '..')"
-        );
+        bail!("submodule {what} '{value}' must stay inside {base} (no leading '/', no '..')");
     }
     if !p.components().any(|c| matches!(c, Component::Normal(_))) {
-        bail!("submodule path '{path}' does not name a directory inside the superproject");
+        bail!("submodule {what} '{value}' does not name a directory inside {base}");
     }
     Ok(())
 }
