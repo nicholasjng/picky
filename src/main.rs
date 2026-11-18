@@ -35,7 +35,9 @@ fn refs_for(root: &Path, sm: &Submodule) -> Vec<String> {
     let pairs = match refcache::read(&url) {
         Some(c) if c.fresh => c.refs,
         Some(c) => {
-            spawn_bg_refresh(&sm.path);
+            if refcache::claim_refresh(&url) {
+                spawn_bg_refresh(&sm.path);
+            }
             c.refs
         }
         None => match refcache::ls_remote(&url, Some(refcache::COMPLETION_TIMEOUT)) {

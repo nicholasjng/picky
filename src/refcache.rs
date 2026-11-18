@@ -71,6 +71,33 @@ pub fn read(url: &str) -> Option<Cached> {
     Some(Cached { refs, fresh })
 }
 
+/// Claim the background refresh of a stale cache for `url`: `false` when
+/// another claim is younger than [`REFRESH_TIMEOUT`], i.e. a refresh may
+/// still be running.
+///
+/// Without it every TAB press on a stale cache spawns another detached
+/// `picky refresh`, so tapping TAB a few times runs several identical
+/// `ls-remote`s against the same remote at once. The marker is never
+/// removed; it simply ages out, which also covers a refresh that died.
+pub fn claim_refresh(url: &str) -> bool {
+    let Some(marker) = cache_file(url).map(|f| f.with_extension("refreshing")) else {
+        return false;
+    };
+    let busy = std::fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| SystemTime::now().duration_since(m).ok())
+        .is_some_and(|age| age < REFRESH_TIMEOUT);
+    if busy {
+        return false;
+    }
+    // Rewriting the marker bumps its mtime, restarting the window.
+    marker
+        .parent()
+        .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+        && std::fs::write(&marker, b"").is_ok()
+}
+
 /// Atomically write the ref list for `url`.
 pub fn write(url: &str, refs: &[(String, String)]) -> std::io::Result<()> {
     let Some(file) = cache_file(url) else {
