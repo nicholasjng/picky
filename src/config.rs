@@ -140,7 +140,9 @@ pub fn check_depth(depth: Option<u32>) -> Result<()> {
 pub struct Config {
     /// `(key, value)` in file order, duplicates kept: `picky.<name>.sparse` is
     /// multivalued, and git resolves a single-valued key to the *last* entry.
-    entries: Vec<(String, String)>,
+    /// `None` is a bare `key` with no `=`, which git reads as boolean true and
+    /// which differs from an explicit empty value (`key =`, boolean false).
+    entries: Vec<(String, Option<String>)>,
 }
 
 impl Config {
@@ -170,21 +172,39 @@ impl Config {
             .split('\0')
             .filter(|e| !e.is_empty())
             .map(|entry| match entry.split_once('\n') {
-                Some((k, v)) => (k.to_string(), v.to_string()),
-                None => (entry.to_string(), String::new()),
+                Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                None => (entry.to_string(), None),
             })
             .collect();
         Self { entries }
     }
 
-    /// The value of a single-valued key: the last one set, as git resolves it.
-    fn get(&self, key: &str) -> Option<&str> {
+    /// The raw last entry for `key`: `Some(None)` for a bare key.
+    fn last(&self, key: &str) -> Option<Option<&str>> {
         let key = normalize_key(key);
         self.entries
             .iter()
             .rev()
             .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.as_str())
+            .map(|(_, v)| v.as_deref())
+    }
+
+    /// The value of a single-valued key: the last one set, as git resolves it.
+    fn get(&self, key: &str) -> Option<&str> {
+        self.last(key).map(Option::unwrap_or_default)
+    }
+
+    /// A boolean key, read the way git reads one: a bare key, `true`/`yes`/
+    /// `on`, or a non-zero integer is true. An unset key is false; a value
+    /// git itself would reject is an error rather than a silent false.
+    fn get_bool(&self, key: &str) -> Result<bool> {
+        match self.last(key) {
+            None => Ok(false),
+            Some(None) => Ok(true),
+            Some(Some(v)) => {
+                parse_bool(v).with_context(|| format!("{key} is not a boolean: '{v}'"))
+            }
+        }
     }
 
     /// Every value of a multivalued key, in file order.
@@ -193,7 +213,7 @@ impl Config {
         self.entries
             .iter()
             .filter(|(k, _)| *k == key)
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| v.clone().unwrap_or_default())
             .collect()
     }
 
@@ -242,7 +262,7 @@ impl Config {
                 .map_or_else(|| name.to_string(), str::to_string),
             url: self.get(&sub("url")).unwrap_or_default().to_string(),
             branch: self.get(&sub("branch")).map(str::to_string),
-            shallow: self.get(&sub("shallow")) == Some("true"),
+            shallow: self.get_bool(&sub("shallow"))?,
             sparse: self.get_all(&own("sparse")),
             depth: self
                 .get(&own("depth"))
@@ -425,7 +445,7 @@ pub fn remove(root: &Path, name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, check_path, normalize_key};
+    use super::{Config, check_path, normalize_key, parse_bool};
 
     /// `git config --list -z`: NUL-separated entries of `key\nvalue`.
     fn cfg(entries: &[&str]) -> Config {
@@ -497,6 +517,33 @@ mod tests {
         assert!(c.all().unwrap().is_empty());
         assert!(c.only().is_err());
         assert!(c.find("nope").is_err());
+    }
+
+    #[test]
+    fn shallow_reads_every_spelling_of_a_git_boolean() {
+        let shallow = |entry: &str| {
+            cfg(&["submodule.a.path\na", entry])
+                .submodule("a")
+                .map(|sm| sm.shallow)
+        };
+        for yes in [
+            "submodule.a.shallow\ntrue",
+            "submodule.a.shallow\nYes",
+            "submodule.a.shallow\n1",
+            "submodule.a.shallow",
+        ] {
+            assert!(shallow(yes).unwrap(), "{yes:?} should be shallow");
+        }
+        for no in [
+            "submodule.a.shallow\nfalse",
+            "submodule.a.shallow\noff",
+            "submodule.a.shallow\n0",
+            "submodule.a.shallow\n",
+        ] {
+            assert!(!shallow(no).unwrap(), "{no:?} should not be shallow");
+        }
+        assert!(shallow("submodule.a.shallow\nmaybe").is_err());
+        assert_eq!(parse_bool("ON"), Some(true));
     }
 
     #[test]

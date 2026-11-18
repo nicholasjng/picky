@@ -164,8 +164,10 @@ picky sparse clear -p ext/duckdb                         # drop all → full che
 picky sparse add /x/ -p ext/duckdb --no-reinit           # edit .gitmodules only
 ```
 
-It edits `.gitmodules`, stages it, then re-runs `init` for that submodule
-(`--no-reinit` skips the reconcile). Removal is by **exact value**, so patterns
+It edits `.gitmodules`, stages it, then reconciles the submodule the way
+`picky update <path>` refreshes it: back onto its pin with the new patterns,
+patch stack re-applied (`--no-reinit` skips the reconcile). A submodule that
+isn't checked out yet gets a plain `init` instead. Removal is by **exact value**, so patterns
 with metacharacters like `/extension/*.cmake` work without the `git config
 --unset` regex footgun.
 

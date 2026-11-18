@@ -65,7 +65,13 @@ pub fn run(root: &Path, opts: UpdateOptions, con: &Console) -> Result<()> {
             (Some(a), Some(b)) => (cfg.find(&a)?, Some(b)),
             (Some(a), None) => match cfg.find(&a) {
                 Ok(sm) => (sm, None),
-                Err(_) => (cfg.only()?, Some(a)),
+                // Name the argument: with several submodules, a mistyped
+                // path otherwise surfaces as a bare "specify a path".
+                Err(_) => (
+                    cfg.only()
+                        .with_context(|| format!("'{a}' is not a declared submodule path"))?,
+                    Some(a),
+                ),
             },
             (None, _) => (cfg.only()?, None),
         };

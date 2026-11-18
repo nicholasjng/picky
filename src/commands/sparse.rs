@@ -142,9 +142,21 @@ pub fn run(
 
     if no_reinit {
         con.plain("  run `picky init` to reconcile the checkout");
+    } else if root.join(&sm.path).join(".git").exists() {
+        // Reconcile an existing checkout the way `update` refreshes one:
+        // `checkout -f` onto the pin with the new patterns (widening
+        // materializes new paths, narrowing trims removed ones), then the
+        // patch stack. `init` would leave the tree pristine, silently
+        // dropping a patch stack `update` had applied.
+        commands::update::run(
+            root,
+            commands::update::UpdateOptions {
+                target: Some(sm.path.clone()),
+                ..Default::default()
+            },
+            con,
+        )?;
     } else {
-        // Reconcile: rewrites the sparse file and reapplies (widening
-        // materializes new paths, narrowing trims removed ones).
         commands::init::run(root, std::slice::from_ref(&sm.path), con)?;
     }
     Ok(())

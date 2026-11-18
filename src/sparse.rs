@@ -148,8 +148,19 @@ pub fn prepare(root: &Path, sm: &Submodule, con: &Console) -> Result<PathBuf> {
     }
     git::run(wt, &["config", "extensions.partialClone", "origin"])?;
     git::run(wt, &["config", "remote.origin.promisor", "true"])?;
-    if let Some(filter) = sm.effective_filter() {
-        git::run(wt, &["config", "remote.origin.partialclonefilter", filter])?;
+    match sm.effective_filter() {
+        Some(filter) => git::run(wt, &["config", "remote.origin.partialclonefilter", filter])?,
+        // A promisor remote's `git fetch` falls back to this key when no
+        // `--filter` is passed, so a leftover `blob:none` would keep every
+        // later fetch blobless after the declaration switched to `none`.
+        // `promisor`/`partialClone` stay: blobs already omitted must still
+        // be lazily fetchable.
+        None => {
+            let _ = git::ok(
+                wt,
+                &["config", "--unset", "remote.origin.partialclonefilter"],
+            );
+        }
     }
 
     set_sparse_state(wt, sm)?;

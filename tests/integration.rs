@@ -1883,7 +1883,6 @@ fn doctor_reports_sparse_drift_from_the_declaration() {
     assert!(stderr.contains("full checkout"), "{stderr}");
 }
 
-
 /// A `.gitmodules` URL is attacker-controlled in a hostile clone. Passed to
 /// `git ls-remote` without a `--`, a value like `--upload-pack=<cmd>` parses as
 /// an option and `<cmd>` runs against the superproject's own (local) remote:
@@ -1913,6 +1912,78 @@ fn refresh_does_not_run_an_option_shaped_url() {
 
     let _ = picky(&sup, &["refresh"]);
     assert!(!marker.exists(), "an option-shaped URL ran a command");
+}
+
+/// `picky sparse` reconciles the checkout after editing the patterns. Going
+/// through `init` (which checks out pristine upstream) silently dropped a
+/// patch stack `update` had applied.
+#[test]
+fn sparse_edit_keeps_the_patch_stack() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], Some("patches"));
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    write(
+        &sup.join("patches/0001-good.patch"),
+        "--- a/src/c.txt\n+++ b/src/c.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+line2-patched\n line3\n",
+    );
+    assert!(picky(&sup, &["update"]).status.success());
+
+    let out = picky(&sup, &["sparse", "add", "/keep/"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        dep.join("keep/a.txt").exists(),
+        "widened path should appear"
+    );
+    assert!(
+        std::fs::read_to_string(dep.join("src/c.txt"))
+            .unwrap()
+            .contains("line2-patched"),
+        "the patch stack must survive a sparse edit"
+    );
+}
+
+/// A promisor remote's `git fetch` falls back to `partialclonefilter` when no
+/// `--filter` is passed, so switching a declaration to `filter = none` must
+/// clear the key, not leave the old `blob:none` silently in force.
+#[test]
+fn filter_none_clears_a_previous_partial_clone_filter() {
+    let (_tmp, sup, _v1) = fixture(&["/src/"], None);
+    let dep = sup.join("ext/dep");
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    assert_eq!(
+        git(
+            &dep,
+            &["config", "--get", "remote.origin.partialclonefilter"]
+        ),
+        "blob:none"
+    );
+
+    git(
+        &sup,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "picky.ext/dep.filter",
+            "none",
+        ],
+    );
+    assert!(picky(&sup, &["init", "ext/dep"]).status.success());
+    let still_set = Command::new("git")
+        .arg("-C")
+        .arg(&dep)
+        .args(["config", "--get", "remote.origin.partialclonefilter"])
+        .output()
+        .unwrap();
+    assert!(
+        !still_set.status.success(),
+        "stale filter left behind: {}",
+        String::from_utf8_lossy(&still_set.stdout)
+    );
 }
 
 /// `check_path` is lexical; a committed symlink as a leading component sends
