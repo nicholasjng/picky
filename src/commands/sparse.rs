@@ -141,7 +141,10 @@ pub fn run(
     ));
 
     if no_reinit {
-        con.plain("  run `picky init` to reconcile the checkout");
+        con.plain(format!(
+            "  run `picky update {}` to reconcile the checkout",
+            sm.path
+        ));
     } else if root.join(&sm.path).join(".git").exists() {
         // Reconcile an existing checkout the way `update` refreshes one:
         // `checkout -f` onto the pin with the new patterns (widening

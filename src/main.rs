@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand, ValueHint};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate, Shell};
 
 use picky::config::{self, Submodule};
@@ -268,64 +268,61 @@ enum SparseAction {
     },
     /// Add one or more patterns and reconcile the checkout
     Add {
-        /// Patterns to add (or read them with --stdin / --from)
-        patterns: Vec<String>,
-        /// Read newline-delimited patterns from stdin
-        #[arg(long)]
-        stdin: bool,
-        /// Read newline-delimited patterns from a file
-        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
-        from: Option<PathBuf>,
-        /// Submodule path (optional when only one submodule exists)
-        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
-        path: Option<String>,
-        /// Edit config only; don't re-run init
-        #[arg(long)]
-        no_reinit: bool,
+        #[command(flatten)]
+        patterns: PatternArgs,
+        #[command(flatten)]
+        target: SparseTarget,
     },
     /// Remove one or more patterns (exact match) and reconcile the checkout
     Remove {
-        /// Patterns to remove (or read them with --stdin / --from)
-        patterns: Vec<String>,
-        /// Read newline-delimited patterns from stdin
-        #[arg(long)]
-        stdin: bool,
-        /// Read newline-delimited patterns from a file
-        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
-        from: Option<PathBuf>,
-        /// Submodule path (optional when only one submodule exists)
-        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
-        path: Option<String>,
-        /// Edit config only; don't re-run init
-        #[arg(long)]
-        no_reinit: bool,
+        #[command(flatten)]
+        patterns: PatternArgs,
+        #[command(flatten)]
+        target: SparseTarget,
     },
     /// Replace the whole pattern list and reconcile the checkout
     Set {
-        /// Patterns to set (or read them with --stdin / --from)
-        patterns: Vec<String>,
-        /// Read newline-delimited patterns from stdin
-        #[arg(long)]
-        stdin: bool,
-        /// Read newline-delimited patterns from a file
-        #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
-        from: Option<PathBuf>,
-        /// Submodule path (optional when only one submodule exists)
-        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
-        path: Option<String>,
-        /// Edit config only; don't re-run init
-        #[arg(long)]
-        no_reinit: bool,
+        #[command(flatten)]
+        patterns: PatternArgs,
+        #[command(flatten)]
+        target: SparseTarget,
     },
     /// Remove all patterns (⇒ full checkout) and reconcile the checkout
     Clear {
-        /// Submodule path (optional when only one submodule exists)
-        #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
-        path: Option<String>,
-        /// Edit config only; don't re-run init
-        #[arg(long)]
-        no_reinit: bool,
+        #[command(flatten)]
+        target: SparseTarget,
     },
+}
+
+/// Where `sparse add`/`remove`/`set` take their patterns from.
+#[derive(Args)]
+struct PatternArgs {
+    /// Patterns (or read them with --stdin / --from)
+    patterns: Vec<String>,
+    /// Read newline-delimited patterns from stdin
+    #[arg(long)]
+    stdin: bool,
+    /// Read newline-delimited patterns from a file
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+    from: Option<PathBuf>,
+}
+
+impl PatternArgs {
+    fn collect(self) -> Result<Vec<String>> {
+        commands::sparse::collect_patterns(self.patterns, self.stdin, self.from)
+    }
+}
+
+/// Which submodule a mutating `sparse` action edits, and whether to
+/// reconcile its checkout afterwards.
+#[derive(Args)]
+struct SparseTarget {
+    /// Submodule path (optional when only one submodule exists)
+    #[arg(short, long, add = ArgValueCandidates::new(submodule_candidates))]
+    path: Option<String>,
+    /// Edit .gitmodules only; don't reconcile the checkout
+    #[arg(long)]
+    no_reinit: bool,
 }
 
 fn main() {
@@ -405,41 +402,22 @@ fn run(command: Commands, con: &Console) -> Result<()> {
         ),
         Commands::Sparse { action } => {
             use commands::sparse::{self, Action};
-            let (path, op, no_reinit) = match action {
-                SparseAction::List { path } => (path, Action::List, false),
-                SparseAction::Add {
-                    patterns,
-                    stdin,
-                    from,
-                    path,
-                    no_reinit,
-                } => {
-                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
-                    (path, Action::Add(pats), no_reinit)
+            let (target, op) = match action {
+                SparseAction::List { path } => {
+                    return sparse::run(&root, path, Action::List, false, con);
                 }
-                SparseAction::Remove {
-                    patterns,
-                    stdin,
-                    from,
-                    path,
-                    no_reinit,
-                } => {
-                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
-                    (path, Action::Remove(pats), no_reinit)
+                SparseAction::Add { patterns, target } => {
+                    (target, Action::Add(patterns.collect()?))
                 }
-                SparseAction::Set {
-                    patterns,
-                    stdin,
-                    from,
-                    path,
-                    no_reinit,
-                } => {
-                    let pats = sparse::collect_patterns(patterns, stdin, from)?;
-                    (path, Action::Set(pats), no_reinit)
+                SparseAction::Remove { patterns, target } => {
+                    (target, Action::Remove(patterns.collect()?))
                 }
-                SparseAction::Clear { path, no_reinit } => (path, Action::Clear, no_reinit),
+                SparseAction::Set { patterns, target } => {
+                    (target, Action::Set(patterns.collect()?))
+                }
+                SparseAction::Clear { target } => (target, Action::Clear),
             };
-            sparse::run(&root, path, op, no_reinit, con)
+            sparse::run(&root, target.path, op, target.no_reinit, con)
         }
         Commands::Status { paths, json } => commands::status::run(&root, &paths, json, con),
         Commands::Refresh { paths } => commands::refresh::run(&root, &paths, con),
